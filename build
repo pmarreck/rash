@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+# Build the current Rash baseline in Nix's sandbox.
+set -u
+
+case "${1-}" in
+"")
+	nix build .#default
+	;;
+--debug)
+	nix build .#debug
+	;;
+--test)
+	exec "$(dirname "$0")/test"
+	;;
+-h|--help)
+	printf '%s\n' 'usage: ./build [--debug | --test]'
+	;;
+*)
+	printf 'unknown build option: %s\n' "$1" >&2
+	exit 64
+	;;
+esac

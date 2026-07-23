@@ -1,0 +1,3 @@
+# Native Linux upstream baseline: build plus complete test suite.
+packages.x86_64-linux.default
+checks.x86_64-linux.test
