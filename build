@@ -10,11 +10,14 @@ case "${1-}" in
 --debug)
 	nix build .#debug
 	;;
+--zig)
+	nix build .#zig
+	;;
 --test)
 	exec "$(dirname "$0")/test"
 	;;
 -h|--help)
-	printf '%s\n' 'usage: ./build [--debug | --test]'
+	printf '%s\n' 'usage: ./build [--debug | --zig | --test]'
 	;;
 *)
 	printf 'unknown build option: %s\n' "$1" >&2

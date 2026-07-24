@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# Validate the benchmark entry point without running timing-sensitive work.
+set -u
+
+project_dir=$(cd "$(dirname "$0")/../.." && pwd)
+source "$HOME/dotfiles/bin/src/capture.bash"
+
+failures=0
+
+fail() {
+	printf 'bm CLI test: %s\n' "$1" >&2
+	failures=$((failures + 1))
+}
+
+out=
+err=
+rc=
+capture "$project_dir/bm" --help
+if [ "$rc" -ne 0 ]; then
+	fail "--help exited $rc"
+fi
+if [ "$out" != 'usage: ./bm [--runs N]' ]; then
+	fail "--help output was unexpected: $out"
+fi
+if [ -n "$err" ]; then
+	fail "--help wrote stderr: $err"
+fi
+
+out=
+err=
+rc=
+capture "$project_dir/bm" --not-an-option
+if [ "$rc" -ne 64 ]; then
+	fail "invalid option exited $rc"
+fi
+if [ -n "$out" ]; then
+	fail "invalid option wrote stdout: $out"
+fi
+if [ "$err" != 'unknown benchmark option: --not-an-option' ]; then
+	fail "invalid option stderr was unexpected: $err"
+fi
+
+exit "$failures"

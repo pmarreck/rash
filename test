@@ -9,4 +9,29 @@ if [ "$status" -ne 0 ]; then
 	exit "$status"
 fi
 
-nix build ".#checks.${system}.test"
+check=test
+case "${1-}" in
+"")
+	;;
+--zig)
+	check=zig-test
+	;;
+-h|--help)
+	printf '%s\n' 'usage: ./test [--zig]'
+	exit 0
+	;;
+*)
+	printf 'unknown test option: %s\n' "$1" >&2
+	exit 64
+	;;
+esac
+
+failures=0
+if ! nix build ".#checks.${system}.${check}"; then
+	failures=$((failures + 1))
+fi
+if ! nix develop -c "$(dirname "$0")/tests/cli/bm"; then
+	failures=$((failures + 1))
+fi
+
+exit "$failures"

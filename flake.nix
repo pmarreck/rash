@@ -16,8 +16,12 @@
 			packages = forAllSystems (system:
 				let
 					pkgs = import nixpkgs { inherit system; };
-					mkBash = { debug ? false, withTests ? false }:
-						pkgs.stdenv.mkDerivation {
+					mkBash = { debug ? false, withTests ? false, useZigCompiler ? false }:
+						let
+							zigCc = pkgs.writeShellScriptBin "rash-zig-cc" ''
+								exec ${pkgs.zig}/bin/zig cc "$@"
+							'';
+						in pkgs.stdenv.mkDerivation {
 							pname = "bash";
 							version = "5.3-p15";
 							src = self;
@@ -28,7 +32,7 @@
 								gettext
 								pkg-config
 								texinfo
-							];
+							] ++ pkgs.lib.optionals useZigCompiler [ zigCc ];
 							buildInputs = with pkgs; [ ncurses ];
 
 							CFLAGS = if debug then "-O0 -g3" else null;
@@ -39,6 +43,12 @@
 							preConfigure = ''
 								export HOME="$TMPDIR/home"
 								mkdir -p "$HOME"
+								${pkgs.lib.optionalString useZigCompiler ''
+									export CC="${zigCc}/bin/rash-zig-cc"
+									export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+									export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
+									mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+								''}
 							'';
 
 							meta = with pkgs.lib; {
@@ -52,13 +62,18 @@
 					default = baseline;
 					bash = baseline;
 					debug = mkBash { debug = true; };
+					zig = mkBash { useZigCompiler = true; };
 				});
 
 			checks = forAllSystems (system:
 				let
 					pkgs = import nixpkgs { inherit system; };
-					mkBash = { debug ? false, withTests ? false }:
-						pkgs.stdenv.mkDerivation {
+					mkBash = { debug ? false, withTests ? false, useZigCompiler ? false }:
+						let
+							zigCc = pkgs.writeShellScriptBin "rash-zig-cc" ''
+								exec ${pkgs.zig}/bin/zig cc "$@"
+							'';
+						in pkgs.stdenv.mkDerivation {
 							pname = "bash";
 							version = "5.3-p15";
 							src = self;
@@ -69,7 +84,7 @@
 								gettext
 								pkg-config
 								texinfo
-							];
+							] ++ pkgs.lib.optionals useZigCompiler [ zigCc ];
 							nativeCheckInputs = pkgs.lib.optionals withTests [
 								pkgs.dash
 								pkgs.util-linuxMinimal
@@ -94,6 +109,12 @@
 							preConfigure = ''
 								export HOME="$TMPDIR/home"
 								mkdir -p "$HOME"
+								${pkgs.lib.optionalString useZigCompiler ''
+									export CC="${zigCc}/bin/rash-zig-cc"
+									export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+									export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
+									mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+								''}
 							'';
 
 							preCheck = pkgs.lib.optionalString withTests ''
@@ -120,6 +141,8 @@
 				in {
 					build = baseline;
 					test = mkBash { withTests = true; };
+					zig-build = mkBash { useZigCompiler = true; };
+					zig-test = mkBash { withTests = true; useZigCompiler = true; };
 				});
 
 			devShells = forAllSystems (system:
@@ -133,8 +156,11 @@
 							bison
 							gettext
 							gnumake
+							hyperfine
+							jq
 							pkg-config
 							texinfo
+							zig
 						];
 						buildInputs = with pkgs; [ ncurses ];
 					};
