@@ -751,6 +751,7 @@ sh_openpipe (int *pv)
 {
   int r;
 
+  pv[0] = pv[1] = -1;
   if ((r = pipe (pv)) < 0)
     return r;
 

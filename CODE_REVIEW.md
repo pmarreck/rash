@@ -6,10 +6,11 @@ and all 13 requested review dimensions. Generated documentation and vendored
 compatibility code were not treated as Rash-authored defects.
 
 Summary at the reviewed baseline: **1 critical**, **7 warnings**, and **1
-advisory**. The aggregate-runner critical finding is resolved in the current
-review unit; the remaining source-level findings are tracked below. There are
-no databases in this project, and no other verified FFI boundary apart from
-dynamically loaded builtins.
+advisory**. The aggregate-runner critical finding and the coprocess
+pipe-exhaustion warning are resolved in the current review units; the
+remaining source-level findings are tracked below. There are no databases in
+this project, and no other verified FFI boundary apart from dynamically loaded
+builtins.
 
 ## 1. Incomplete or inconsistent functionality
 
@@ -118,7 +119,7 @@ without demonstrated benefit.
 
 ## 10. Memory safety and resource handling
 
-### WARNING: failed coprocess pipe creation uses uninitialized descriptors
+### RESOLVED WARNING: failed coprocess pipe creation used uninitialized descriptors
 
 `execute_cmd.c:2520-2521` ignores both fallible `sh_openpipe` calls.
 `general.c:750-760` returns failure without initializing the output pair; the
@@ -127,11 +128,10 @@ those arbitrary values. The exact Nix-built shell reproduces this with
 `ulimit -n 4; coproc c { :; }`: it returns zero, exports implausible descriptors,
 and the child reports failed `dup2` operations.
 
-Initialize both pairs to `-1`, check each open, close the first pair when the
-second open fails, and return the normal pipe failure before forking or
-exporting coprocess variables. Add an isolated low-`RLIMIT_NOFILE` case at the
-end of `tests/coproc.tests` first; it must assert nonzero status and a controlled
-diagnostic.
+Resolved by initializing pipe pairs, checking both `sh_openpipe` calls, closing
+the first pair if the second fails, and returning the normal pipe failure before
+forking or exporting coprocess variables. A low-`RLIMIT_NOFILE` regression in
+`tests/coproc.tests` asserts nonzero status and a `coproc: pipe error` diagnostic.
 
 ## 11. FFI boundary correctness
 
@@ -150,12 +150,12 @@ with a focused loadable-builtin integration test.
 
 ## 12. Error handling
 
-### WARNING: coprocess pipe exhaustion is incorrectly reported as success
+### RESOLVED WARNING: coprocess pipe exhaustion was incorrectly reported as success
 
-This is the visible error-handling aspect of the dimension-10 defect at
-`execute_cmd.c:2520-2566`: `EMFILE` reaches neither a pipe diagnostic nor a
-failure status before `make_child`. The same regression must require a
-controlled diagnostic and nonzero status.
+This was the visible error-handling aspect of the dimension-10 defect:
+`EMFILE` reached neither a pipe diagnostic nor a failure status before
+`make_child`. The shared regression now requires a controlled diagnostic and
+nonzero status.
 
 ## 13. Database access
 
@@ -165,6 +165,6 @@ database-client path exists in the repository.
 ## Recommended order
 
 1. ~~Repair the aggregate test runner with a red–green regression harness.~~
-2. Repair the coprocess pipe-failure path with a contained regression test.
+2. ~~Repair the coprocess pipe-failure path with a contained regression test.~~
 3. Address test determinism, documentation, and dynamic-builtin lifecycle in
    separately reviewed units.

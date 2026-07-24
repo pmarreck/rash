@@ -5,4 +5,5 @@
 - [ ] Define Rash's reversible/agent-safe purpose and document the initial safety architecture without changing shell semantics accidentally.
 - [ ] Rename the live project surface from Bash to Rash carefully, with a tested reversible mapping and an explicit decision about historical/GPL attribution.
 - [ ] Assess a compatible Zig 0.16 rewrite: subsystem boundaries, compatibility risks, sequencing, and a realistic effort range.
-- [ ] Complete the 13-dimension deep review in `CODE_REVIEW.md`, repair the aggregate test runner with a regression test, make every upstream driver pass in a hermetic Nix environment, then commit/push the green unit. Curiosity poke: a green check must never suppress a driver failure or borrow undeclared host state.
+- [x] Complete the 13-dimension deep review in `CODE_REVIEW.md`, repair the aggregate test runner and coprocess pipe-exhaustion paths with regressions, and make every upstream driver pass in a hermetic Nix environment. (2026-07-24 03:06 EDT) Curiosity poke: a green check must never suppress a driver failure or borrow undeclared host state.
+- [ ] Eliminate remaining test timing/global-fixture risks and assess the dynamic-builtin lifecycle leak in separate red–green units.

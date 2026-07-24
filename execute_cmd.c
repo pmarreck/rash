@@ -2476,7 +2476,7 @@ coproc_unsetvars (struct coproc *cp)
 static int
 execute_coproc (COMMAND *command, int pipe_in, int pipe_out, struct fd_bitmap *fds_to_close)
 {
-  int rpipe[2], wpipe[2], estat, invert;
+  int rpipe[2] = { -1, -1 }, wpipe[2] = { -1, -1 }, estat, invert, pipe_errno;
   pid_t coproc_pid;
   Coproc *cp;
   char *tcmd, *p, *name;
@@ -2517,8 +2517,20 @@ execute_coproc (COMMAND *command, int pipe_in, int pipe_out, struct fd_bitmap *f
   command_string_index = 0;
   tcmd = make_command_string (command);
 
-  sh_openpipe ((int *)&rpipe);	/* 0 = parent read, 1 = child write */
-  sh_openpipe ((int *)&wpipe); /* 0 = child read, 1 = parent write */
+  if (sh_openpipe (rpipe) < 0)
+    {
+      sys_error (_("coproc: pipe error"));
+      return (invert ? EXECUTION_SUCCESS : EXECUTION_FAILURE);
+    }
+
+  if (sh_openpipe (wpipe) < 0)
+    {
+      pipe_errno = errno;
+      sh_closepipe (rpipe);
+      errno = pipe_errno;
+      sys_error (_("coproc: pipe error"));
+      return (invert ? EXECUTION_SUCCESS : EXECUTION_FAILURE);
+    }
 
   BLOCK_SIGNAL (SIGCHLD, set, oset);
 
