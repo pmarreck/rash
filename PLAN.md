@@ -6,5 +6,5 @@
 - [ ] Rename the live project surface from Bash to Rash carefully, with a tested reversible mapping and an explicit decision about historical/GPL attribution.
 - [ ] Assess a compatible Zig 0.16 rewrite: subsystem boundaries, compatibility risks, sequencing, and a realistic effort range.
 - [x] Complete the 13-dimension deep review in `CODE_REVIEW.md`, repair the aggregate test runner and coprocess pipe-exhaustion paths with regressions, and make every upstream driver pass in a hermetic Nix environment. (2026-07-24 03:06 EDT) Curiosity poke: a green check must never suppress a driver failure or borrow undeclared host state.
-- [x] Rename the top-level README to `README.md` so GitHub renders the canonical Mechatron Prime CI badge. (2026-07-24 13:07 EDT)
+- [x] Rename the top-level README to `README.md` so GitHub renders the canonical Mechatron Prime CI badge, and update the install manifest to ship the renamed file. (2026-07-24 13:07 EDT; hermetic package and full test targets pass.)
 - [ ] Eliminate remaining test timing/global-fixture risks and assess the dynamic-builtin lifecycle leak in separate red–green units.

@@ -619,8 +619,8 @@ CREATED_HEADERS = signames.h config.h pathnames.h version.h \
 CREATED_SUBDIR_HEADERS = ${LIBINTL_H}
 
 OTHER_DOCS = $(srcdir)/CHANGES $(srcdir)/COMPAT $(srcdir)/NEWS $(srcdir)/POSIX \
-	$(srcdir)/RBASH $(srcdir)/README
-OTHER_INSTALLED_DOCS = CHANGES COMPAT NEWS POSIX RBASH README
+	$(srcdir)/RBASH $(srcdir)/README.md
+OTHER_INSTALLED_DOCS = CHANGES COMPAT NEWS POSIX RBASH README.md
 
 LOADABLES_DIR = ${top_builddir}/examples/loadables
 
