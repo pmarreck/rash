@@ -1,14 +1,18 @@
-Introduction
-============
+Rash
+====
 
 [![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Frash.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
+
+Rash is an opinionated, experimental fork of GNU Bash 5.3. It preserves Bash's
+shell semantics while developing hermetic validation, compiler diversity, and a
+scoped reversible-mutation safety model.
 
 Rash development uses hermetic Nix commands: `./build` and `./test` use the
 GCC baseline; `./build --zig` and `./test --zig` compile the same C sources
 with pinned Zig 0.16; `./bm` compares their release-mode execution times and
 records wall-clock, user-CPU, and system-CPU history.
 
-This is GNU Bash, version 5.3. Bash is the GNU Project's Bourne
+GNU Bash is the GNU Project's Bourne
 Again SHell, a complete implementation of the POSIX shell spec,
 but also with interactive command line editing, job control on
 architectures that support it, csh-like features such as history
