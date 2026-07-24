@@ -2,10 +2,13 @@
 ver=1.2
 annotate=[
 	.mechatron-prime/targets = Exact native Linux targets accepted by Mechatron Prime for each Rash master push.
+	CODE_REVIEW.md = 13-dimension evidence-backed code review and remediation order
 	PLAN.md = First exploration milestones for the Rash agent-safe shell fork.
 	build = Hermetic Nix build wrapper for the upstream Bash baseline.
 	flake.lock = Immutable Nixpkgs input pin for reproducible builds and tests.
 	flake.nix = Pinned Nix package, checks, and development shell for the unmodified upstream baseline.
 	inbox/2026-07-21-rash-kickoff.md = Durable task brief for the dedicated Rash agent.
 	test = Hermetic Nix wrapper that runs the complete upstream Bash test suite.
+	tests/run-test-harness = Invokes the aggregate-runner regression harness under Bash
+	tests/unit/run-all-harness = Creates an isolated fixture proving run-all propagates failures while continuing drivers
 ]

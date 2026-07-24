@@ -71,7 +71,8 @@ command cd -L $TDIR
 ./x23
 
 # this should result in a cannot execute binary file error since ls is in $PATH
-PATH=/bin:/usr/bin
+: ${BASH_TEST_PATH:=/bin:/usr/bin}
+PATH=$BASH_TEST_PATH
 ${THIS_SH} ls |& sed 's|^.*: ||'
 
 cd $SAVEPWD

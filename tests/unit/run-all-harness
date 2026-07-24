@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+set -u
+
+source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+fixture=$(mktemp -d "${TMPDIR:-/tmp}/rash-run-all.XXXXXXXX")
+
+cleanup() {
+	case "$fixture" in
+	"${TMPDIR:-/tmp}"/rash-run-all.*) rm -rf -- "$fixture" ;;
+	*) printf 'refusing to remove unexpected fixture: %s\n' "$fixture" >&2 ;;
+	esac
+}
+
+fail() {
+	printf 'run-all harness: %s\n' "$1" >&2
+	exit 1
+}
+
+trap cleanup EXIT
+
+cp "$source_root/tests/run-all" "$fixture/run-all"
+printf '%s\n' '#!/usr/bin/env sh' 'exit 0' > "$fixture/version"
+printf '%s\n' '#!/usr/bin/env sh' 'printf "%s\\n" "intentional child failure" > "$BASH_TSTOUT"' 'exit 23' > "$fixture/run-failing"
+printf '%s\n' '#!/usr/bin/env sh' 'touch "$RASH_TEST_HARNESS_MARKER"' > "$fixture/run-passing"
+chmod u+x "$fixture/run-all" "$fixture/version" "$fixture/run-failing" "$fixture/run-passing"
+
+marker="$fixture/passing-ran"
+if (
+	cd "$fixture"
+	THIS_SH=/bin/sh RASH_TEST_HARNESS_MARKER="$marker" sh ./run-all
+) > "$fixture/stdout" 2> "$fixture/stderr"
+then
+	fail 'a failing child runner was reported as success'
+fi
+
+[[ -e "$marker" ]] || fail 'the aggregate runner stopped before later drivers'
+grep -Fx 'run-failing failed' "$fixture/stderr" > /dev/null || fail 'the aggregate runner did not identify the failing child'
+grep -Fx 'intentional child failure' "$fixture/stderr" > /dev/null || fail 'the aggregate runner did not preserve failed-child diagnostics'
+
+exit 0

@@ -26,15 +26,15 @@ posix-bash: line 1: exec: .: cannot execute: Is a directory
 0
 this is bashenv
 trap -- 'echo EXIT' EXIT
-trap -- '' SIGTERM
 trap -- 'echo USR1' SIGUSR1
+trap -- '' SIGTERM
 USR1
 ./exec3.sub: line 38: /tmp/bash-notthere: No such file or directory
 ./exec3.sub: ENOENT: after failed exec: 127
 ./exec3.sub: line 43: exec: bash-notthere: not found
 trap -- 'echo EXIT' EXIT
-trap -- '' SIGTERM
 trap -- 'echo USR1' SIGUSR1
+trap -- '' SIGTERM
 USR1
 EXIT
 ./execscript: line 103: notthere: command not found
@@ -88,13 +88,13 @@ expand_aliases      	on
 0
 0
 0
-/usr/local/bin:/usr/GNU/bin:/usr/bin:/bin:.
+command-p-preserved-path
 cannot find cat in $TMPDIR
 cannot find cat with empty $PATH
-PATH = /usr/local/bin:/usr/GNU/bin:/usr/bin:/bin:.
+PATH-preserved
 cannot find cat in $TMPDIR with hash
 cannot find cat with empty $PATH with hash
-PATH = /usr/local/bin:/usr/GNU/bin:/usr/bin:/bin:.
+PATH-preserved
 trap -- 'echo foo $BASH_SUBSHELL' EXIT
 trap -- 'echo USR1 $BASHPID' SIGUSR1
 between

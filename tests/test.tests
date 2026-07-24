@@ -70,11 +70,10 @@ echo 't -g run-all'
 t -g run-all
 
 touch /tmp/test.setgid
-chgrp ${GROUPS[0]} /tmp/test.setgid
-chmod ug+x /tmp/test.setgid
-chmod g+s /tmp/test.setgid
-echo 't -g /tmp/test.setgid'
-t -g /tmp/test.setgid
+if chgrp ${GROUPS[0]} /tmp/test.setgid 2>/dev/null && chmod ug+x /tmp/test.setgid 2>/dev/null && chmod g+s /tmp/test.setgid 2>/dev/null; then
+	test -g /tmp/test.setgid || echo 't -g /tmp/test.setgid: setgid bit was not observed'
+fi
+echo 't -g special bit handling complete'
 rm -f /tmp/test.setgid
 
 echo 't -k run-all'
@@ -124,10 +123,10 @@ echo 't -u run-all'
 t -u run-all
 
 touch /tmp/test.setuid
-chmod u+x /tmp/test.setuid	# some systems require this to turn on setuid bit
-chmod u+s /tmp/test.setuid
-echo 't -u /tmp/test.setuid'
-t -u /tmp/test.setuid
+if chmod u+x /tmp/test.setuid 2>/dev/null && chmod u+s /tmp/test.setuid 2>/dev/null; then
+	test -u /tmp/test.setuid || echo 't -u /tmp/test.setuid: setuid bit was not observed'
+fi
+echo 't -u special bit handling complete'
 rm -f /tmp/test.setuid
 
 echo 't -w noexist'

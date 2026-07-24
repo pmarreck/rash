@@ -13,9 +13,16 @@
 #
 : ${TMPDIR:=/var/tmp}
 
+test_dir=$(mktemp -d "${TMPDIR}/bash-read2.XXXXXXXX")
+timeout_pipe="${test_dir}/timeout.pipe"
+trap 'rm -rf "${test_dir}"' EXIT HUP INT TERM
+mkfifo "${timeout_pipe}"
+exec 8<> "${timeout_pipe}"
+rm -f "${timeout_pipe}"
+
 a=4
 
-read -t 1 a < /dev/tty
+read -t 1 a <&8
 estat=$?
 if [ $estat -gt 128 ]; then
 	echo timeout 1: ok
@@ -24,7 +31,7 @@ else
 fi
 echo ${a:-unset or null 1}
 
-read -t 0.000001 a < /dev/tty
+read -t 0.000001 a <&8
 estat=$?
 if [ $estat -gt 128 ]; then
 	echo timeout 2: ok
@@ -33,7 +40,7 @@ else
 fi
 echo ${a:-unset or null 2}
 
-sleep 1 | read -t 0.25 a
+read -t 0.25 a <&8
 estat=$?
 if [ $estat -gt 128 ]; then
 	echo timeout 3: ok
@@ -42,7 +49,7 @@ else
 fi
 echo ${a:-unset or null 3}
 
-read -t -3 a < /dev/tty
+read -t -3 a <&8
 echo $?
 
 echo $a
@@ -57,21 +64,16 @@ read -t .001 a <<<abcde
 echo $a
 
 # this is the original test that prompted the change to sh_timers
-cd $TMPDIR
-rm -f a.pipe
-mkfifo a.pipe
-exec 9<> a.pipe
-rm -f a.pipe
+timer_pipe="${test_dir}/timer.pipe"
+mkfifo "${timer_pipe}"
+exec 9<> "${timer_pipe}"
+rm -f "${timer_pipe}"
 
 for c in {0..2000}; do
   (eval "echo {0..$c}" & read -u 9 -t 0.0001) >/dev/null
   printf $'ok %d' "$c" >/dev/null
 done
 
-cd $OLDPWD
-rm -f $TMPDIR/a.pipe		# paranoia
-
 TMOUT=.001
 read a <<<abcde
 echo $a
-

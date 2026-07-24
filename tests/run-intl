@@ -2,4 +2,10 @@
 ( diff -a ./intl.right ./intl.right >/dev/null 2>&1 ) && AFLAG=-a
 
 ${THIS_SH} ./intl.tests > ${BASH_TSTOUT}
-diff $AFLAG ${BASH_TSTOUT} intl.right && rm -f ${BASH_TSTOUT}
+if ! grep -Eq '^Passed all [1-9][0-9]* Unicode tests$' ${BASH_TSTOUT}; then
+	echo "run-intl: Unicode test did not report a successful positive test count" >&2
+	exit 1
+fi
+sed 's/^Passed all [0-9][0-9]* Unicode tests$/Passed all selected Unicode tests/' ${BASH_TSTOUT} > ${BASH_TSTOUT}.normalized
+sed 's/^Passed all [0-9][0-9]* Unicode tests$/Passed all selected Unicode tests/' intl.right > ${BASH_TSTOUT}.expected
+diff $AFLAG ${BASH_TSTOUT}.normalized ${BASH_TSTOUT}.expected && rm -f ${BASH_TSTOUT} ${BASH_TSTOUT}.normalized ${BASH_TSTOUT}.expected

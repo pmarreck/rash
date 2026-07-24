@@ -362,7 +362,7 @@ A star (*) next to a name means that the command is disabled.
  complete [-abcdefgjksuv] [-pr] [-DEI]>  set [-abefhkmnptuvxBCEHPT] [-o optio>
  compopt [-o|+o option] [-DEI] [name .>  shift [n]
  continue [n]                            shopt [-pqsu] [-o] [optname ...]
- coproc [NAME] command [redirections]    source [-p path] filename [argument>
+ coproc [NAME] command [redirections]    source [-p path] filename [arguments>
  declare [-aAfFgiIlnrtux] [name[=value>  suspend [-f]
  dirs [-clpv] [+N] [-N]                  test [expr]
  disown [-h] [-ar] [jobspec ... | pid >  time [-p] pipeline

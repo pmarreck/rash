@@ -58,13 +58,22 @@ rm -f ${BASH_TSTOUT}
 
 echo Any output from any test, unless otherwise noted, indicates a possible anomaly
 
+status=0
+
 for x in run-*
 do
 	case $x in
 	$0|run-minimal|run-gprof)	;;
 	*.orig|*~) ;;
-	*)	echo $x ; sh $x ; rm -f ${BASH_TSTOUT} ;;
+	*)	echo $x
+		if ! sh "$x"; then
+			status=1
+			printf '%s failed\n' "$x" >&2
+			[ -f "${BASH_TSTOUT}" ] && cat "${BASH_TSTOUT}" >&2
+		fi
+		rm -f ${BASH_TSTOUT}
+		;;
 	esac
 done
 
-exit 0
+exit $status

@@ -14,13 +14,14 @@
 # post bash-4.3 changes to how command -p works (avoid modifying $PATH)
 
 : ${TMPDIR=/tmp}
-xpath=/usr/local/bin:/usr/GNU/bin:/usr/bin:/bin:.
+: ${BASH_TEST_PATH:?BASH_TEST_PATH must name the hermetic test tool directory}
+xpath=${BASH_TEST_PATH}:.
 
 # set a value of PATH we can test for; versions of bash up to and including
 # bash-4.3 would set $PATH while running command -p
 PATH=$xpath
 export PATH
-command -p sh -c 'echo $PATH'
+command -p sh -c 'if [ "$PATH" = "$BASH_TEST_PATH:." ]; then echo command-p-preserved-path; else echo command-p-changed-path; fi'
 
 PATH=${TMPDIR}
 command -pv cat	>/dev/null || echo "cannot find cat using standard path"
@@ -34,7 +35,7 @@ PATH= command -pv cat >/dev/null || echo "cannot find cat using standard path wi
 PATH=$TMPDIR command -v cat >/dev/null || echo "cannot find cat in \$TMPDIR"
 PATH= command -v cat >/dev/null || echo "cannot find cat with empty \$PATH"
 
-echo PATH = $PATH
+if [ "$PATH" = "$xpath" ]; then echo PATH-preserved; else echo PATH-changed; fi
 hash cat
 
 PATH=$xpath
@@ -44,4 +45,4 @@ PATH= command -pv cat >/dev/null || echo "cannot find cat using stdpath with has
 PATH=$TMPDIR command -v cat >/dev/null || echo "cannot find cat in \$TMPDIR with hash"
 PATH= command -v cat >/dev/null || echo "cannot find cat with empty \$PATH with hash"
 
-echo PATH = $PATH
+if [ "$PATH" = "$xpath" ]; then echo PATH-preserved; else echo PATH-changed; fi

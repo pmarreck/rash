@@ -14,10 +14,11 @@
 # problems with fork optimization in subshells in bash-5.2
 
 : ${TMPDIR:=/tmp}
+: ${BASH_TEST_PATH:=/usr/local/bin:/usr/bin:/bin}
 TDIR=$TMPDIR/delta-$$
 mkdir "$TDIR" || exit 2
 
-CMD='env true && env ls -1 "$TDIR"'
+CMD='PATH="$BASH_TEST_PATH" env true && PATH="$BASH_TEST_PATH" env ls -1 "$TDIR"'
 
 trap 'rm -rf "$TDIR"' EXIT
 
@@ -26,7 +27,7 @@ cd "$TDIR" &&
 	touch archive install test; 
 	echo "$CMD" > s
 	echo '( echo "1 start" ; . "$TDIR/sub2"  ; echo "1 done" ; exit 42 )' >sub1
-	echo 'echo "2 start" && env echo sub3' >sub2
+	echo 'echo "2 start" && PATH="$BASH_TEST_PATH" env echo sub3' >sub2
 } &&
 cd "$OLDPWD"
 
@@ -41,7 +42,7 @@ d1()
 {
 	cmd="$1"
 
-	( env true && env ls -1 "$TDIR";
+	( PATH="$BASH_TEST_PATH" env true && PATH="$BASH_TEST_PATH" env ls -1 "$TDIR";
 exit 68 )
 	echo $?
 	( . $TDIR/s ; exit 44 )
@@ -59,7 +60,7 @@ dfunc()
 	echo oops: after
 }
 
-${THIS_SH} -c '(. <(echo ": && env echo Darwin"); echo x)'
+${THIS_SH} -c '(. <(echo ": && PATH=\$BASH_TEST_PATH env echo Darwin"); echo x)'
 
 ( dfunc xxx )
 echo $?

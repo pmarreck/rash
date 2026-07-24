@@ -85,7 +85,7 @@ unset -v VAR
 
 # can't test %s, too many varying implementations
 #printf "%.${TOOBIG}s\n" XY
-printf -v VAR "%.${TOOBIG}s\n" XY
+printf_overflow $LINENO -v VAR "%.${TOOBIG}s\n" XY
 echo $VAR
 unset -v VAR
 printf_overflow $LINENO "%.${TOOBIG}Q\n" XY

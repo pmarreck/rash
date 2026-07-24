@@ -36,7 +36,6 @@
 							doCheck = withTests;
 							checkTarget = "tests";
 							enableParallelChecking = false;
-
 							preConfigure = ''
 								export HOME="$TMPDIR/home"
 								mkdir -p "$HOME"
@@ -71,6 +70,14 @@
 								pkg-config
 								texinfo
 							];
+							nativeCheckInputs = pkgs.lib.optionals withTests [
+								pkgs.dash
+								pkgs.util-linuxMinimal
+								pkgs.libredirect.hook
+								pkgs.glibcLocales
+								pkgs.gnugrep
+								pkgs.gnused
+							];
 							buildInputs = with pkgs; [ ncurses ];
 
 							CFLAGS = if debug then "-O0 -g3" else null;
@@ -78,10 +85,29 @@
 							doCheck = withTests;
 							checkTarget = "tests";
 							enableParallelChecking = false;
+							checkPhase = pkgs.lib.optionalString withTests ''
+								runHook preCheck
+								env --default-signal=PIPE script -qefc 'make tests' /dev/null
+								runHook postCheck
+							'';
 
 							preConfigure = ''
 								export HOME="$TMPDIR/home"
 								mkdir -p "$HOME"
+							'';
+
+							preCheck = pkgs.lib.optionalString withTests ''
+								export HOME="$(mktemp -d)"
+								unset version
+								test_fhs="$(mktemp -d)"
+								mkdir -p "$test_fhs/bin"
+								ln -s ${pkgs.coreutils}/bin/* "$test_fhs/bin/"
+								ln -s ${pkgs.gnused}/bin/sed "$test_fhs/bin/sed"
+								ln -s ${pkgs.glibc.bin}/bin/getconf "$test_fhs/bin/getconf"
+								ln -s ${pkgs.dash}/bin/dash "$test_fhs/bin/sh"
+								export BASH_TEST_PATH="$test_fhs/bin"
+								export PATH="$BASH_TEST_PATH:$PATH"
+								export NIX_REDIRECTS="/bin/=$test_fhs/bin/:/usr/=$test_fhs/:/bin=$test_fhs/bin:/usr=$test_fhs"
 							'';
 
 							meta = with pkgs.lib; {
