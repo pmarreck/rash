@@ -1,6 +1,9 @@
 # don't push out -i
 -i
 
+# session handoff docs (skill: handoff)
+HANDOFF*
+
 *.save
 .DS_Store
 .DS_Store?
@@ -118,3 +121,4 @@ examples/loadables/tty
 examples/loadables/uname
 examples/loadables/unlink
 examples/loadables/whoami
+inbox
