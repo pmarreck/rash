@@ -1,0 +1,11 @@
+-c: not-executed
+-c: announced
+-c: printed
+-c: status 0
+-n -c: not-executed
+stdin: not-executed
+stdin: no-stderr
+stdin: printed
+script: not-executed
+script: no-stderr
+script: printed

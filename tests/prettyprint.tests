@@ -1,0 +1,97 @@
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# --pretty-print writes the parsed command to standard output instead of
+# running it. Upstream honors that on the reader-loop input paths (script file
+# and standard input) but not for -c, where the command is executed and the
+# flag has no effect at all. Rash treats -c the same as every other input
+# path: the command is printed and never run.
+#
+# Grounding: the printed form and the command's own output would otherwise
+# share standard output, so the combination cannot produce parseable output.
+# Bash already establishes that a do-not-execute mode overrides -c -- see -n,
+# which is enforced for -c in builtins/evalstring.c and for the reader loop in
+# eval.c. Suppressing execution under a GNU-extension flag is outside POSIX,
+# which specifies -c and -n but knows nothing of --pretty-print.
+#
+# Because a caller may reasonably expect -c to run, and only -c carries that
+# expectation, the non-execution is announced on stderr for -c alone. A script
+# file or standard input gets no diagnostic: printing is the expected result
+# there and a warning would be noise.
+#
+# Every input path is asserted, so the flag is exercised as a classifier over
+# the set of input routes rather than only the route that changed. Output is
+# reduced to stable tokens; shell paths and print formatting must never leak
+# into the expected output.
+
+CANARY=${TMPDIR:-/tmp}/rash-prettyprint-$$
+
+executed()
+{
+	if [ -e "$CANARY" ]; then
+		echo "$1: executed"
+		rm -f "$CANARY"
+	else
+		echo "$1: not-executed"
+	fi
+}
+
+stderr_is()
+{
+	case "$1" in
+	"")				echo "$2: no-stderr" ;;
+	*"not executed"*)		echo "$2: announced" ;;
+	*)				echo "$2: unexpected-stderr" ;;
+	esac
+}
+
+printed()
+{
+	case "$1" in
+	*"echo x"*)	echo "$2: printed" ;;
+	*)		echo "$2: FAIL did not print" ;;
+	esac
+}
+
+# -c: printed, not executed, and the non-execution announced on stderr.
+rm -f "$CANARY"
+out=$(${THIS_SH} --pretty-print -c "echo x > $CANARY" 2>/dev/null)
+status=$?
+err=$(${THIS_SH} --pretty-print -c "echo x > $CANARY" 2>&1 >/dev/null)
+executed "-c"
+stderr_is "$err" "-c"
+printed "$out" "-c"
+echo "-c: status $status"
+
+# -n -c: POSIX noexec already overrides -c. Unchanged by this work.
+rm -f "$CANARY"
+${THIS_SH} -n -c "echo x > $CANARY" >/dev/null 2>&1
+executed "-n -c"
+
+# standard input: printed, not executed, and silent.
+rm -f "$CANARY"
+out=$(echo "echo x > $CANARY" | ${THIS_SH} --pretty-print 2>/dev/null)
+err=$(echo "echo x > $CANARY" | ${THIS_SH} --pretty-print 2>&1 >/dev/null)
+executed "stdin"
+stderr_is "$err" "stdin"
+printed "$out" "stdin"
+
+# script file: printed, not executed, and silent.
+rm -f "$CANARY"
+echo "echo x > $CANARY" > ${CANARY}.sh
+out=$(${THIS_SH} --pretty-print ${CANARY}.sh 2>/dev/null)
+err=$(${THIS_SH} --pretty-print ${CANARY}.sh 2>&1 >/dev/null)
+executed "script"
+stderr_is "$err" "script"
+printed "$out" "script"
+rm -f ${CANARY}.sh

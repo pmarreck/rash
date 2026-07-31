@@ -1,0 +1,2 @@
+${THIS_SH} ./prettyprint.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} prettyprint.right && rm -f ${BASH_TSTOUT}

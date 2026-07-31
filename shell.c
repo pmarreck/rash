@@ -764,13 +764,21 @@ main (int argc, char **argv, char **env)
 	start_debugger ();
 
 #if defined (ONESHOT)
-      executing = shell_initialized = 1;
-      run_one_command (command_execution_string);
-      exit_shell (last_command_exit_value);
-#else /* ONESHOT */
+      /* ONESHOT is a fork-avoidance optimization (see config-top.h); it must
+	 not decide whether a command is executed. The printing modes consume
+	 the command instead of running it, and that is implemented below on
+	 the reader-loop path -- which is exactly what a non-ONESHOT build has
+	 always done for -c. Falling through keeps both builds in agreement
+	 rather than letting an efficiency switch change observable semantics. */
+      if (pretty_print_mode == 0)
+	{
+	  executing = shell_initialized = 1;
+	  run_one_command (command_execution_string);
+	  exit_shell (last_command_exit_value);
+	}
+#endif /* ONESHOT */
       with_input_from_string (command_execution_string, "-c");
       goto read_and_execute;
-#endif /* !ONESHOT */
     }
 
   /* Get possible input filename and set up default_buffered_input or
@@ -816,9 +824,7 @@ main (int argc, char **argv, char **env)
       get_tty_state ();
     }
 
-#if !defined (ONESHOT)
  read_and_execute:
-#endif /* !ONESHOT */
 
   shell_initialized = 1;
 
@@ -828,7 +834,14 @@ main (int argc, char **argv, char **env)
       pretty_print_mode = 0;
     }
   if (pretty_print_mode)
-    exit_shell (pretty_print_loop ());
+    {
+      /* Only -c carries an expectation that the command will be run; a script
+	 file or standard input is already understood to be printed rather than
+	 executed, so a diagnostic there would be noise. */
+      if (command_execution_string)
+	internal_warning (_("-c command was printed, not executed"));
+      exit_shell (pretty_print_loop ());
+    }
 
   /* Read commands until exit condition. */
   reader_loop ();

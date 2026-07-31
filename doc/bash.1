@@ -270,6 +270,25 @@ where the default operation differs from the
 .SM POSIX
 standard to match the standard.
 .TP
+.B \-\-pretty\-print
+Read commands from the script file, the standard input, or the
+.B \-c
+.I command_string
+argument, write a canonically indented representation of each command to
+the standard output, and exit without executing them.
+This option is ignored, with a warning, when the shell is interactive.
+Because
+.B \-c
+otherwise indicates that its argument is to be executed, the shell writes a
+warning to the standard error when it is used, noting that the command was
+printed rather than executed.
+The printed representation and any output the commands themselves produced
+would otherwise be interleaved on the standard output, so printing and
+executing cannot be combined; use
+.B \-n
+if you want to check a command for syntax errors without running it and
+without printing it.
+.TP
 .B \-\-restricted
 The shell becomes restricted (see
 .SM
