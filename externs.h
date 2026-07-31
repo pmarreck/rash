@@ -36,6 +36,7 @@ extern intmax_t evalexp (const char *, int, int *);
 #define FUNC_EXTERNAL	0x02
 
 extern char *make_command_string (COMMAND *);
+extern void emit_command_json (COMMAND *);
 extern char *print_comsub (COMMAND *);
 extern char *named_function_string (char *, COMMAND *, int);
 
@@ -97,6 +98,7 @@ extern void get_current_user_info (void);
 /* Functions from eval.c. */
 extern int reader_loop (void);
 extern int pretty_print_loop (void);
+extern int emit_ast_loop (void);
 extern int parse_command (void);
 extern int read_command (void);
 

@@ -216,6 +216,23 @@ Equivalent to \fB\-D\fP, but the output is in the GNU \fIgettext\fP
 .B \-\-dump\-strings
 Equivalent to \fB\-D\fP.
 .TP
+.B \-\-emit\-ast
+Read commands from the script file, the standard input, or the
+.B \-c
+.I command_string
+argument, write each parsed command to the standard output as a single line
+of JSON, and exit without executing them.
+Words are emitted exactly as written and are not expanded, so
+.B $name
+and command substitutions appear verbatim.
+This option is ignored, with a warning, when the shell is interactive, and
+behaves like
+.B \-\-pretty\-print
+with respect to
+.BR \-c :
+the command is printed rather than run, and a warning is written to the
+standard error saying so.
+.TP
 .B \-\-help
 Display a usage message on standard output and exit successfully.
 .TP

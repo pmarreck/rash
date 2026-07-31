@@ -1646,3 +1646,204 @@ xprintf (const char *format, ...)
   vfprintf (stdout, format, args);
   va_end (args);
 }
+
+/* --emit-ast support: write a parsed command to stdout as JSON.
+
+   Words are emitted exactly as they were written. Expansion is a runtime act
+   with side effects, so `$x' and `$(cmd)' must appear verbatim; resolving them
+   here would let a tool that merely reports a tree execute code. */
+
+static void emit_json_command (COMMAND *);
+
+static void
+emit_json_string (const char *s)
+{
+  putchar ('"');
+  for (; s && *s; s++)
+    {
+      if (*s == '"' || *s == '\\')
+	printf ("\\%c", *s);
+      else if ((unsigned char)*s < 0x20)
+	printf ("\\u%04x", (unsigned char)*s);
+      else
+	putchar (*s);
+    }
+  putchar ('"');
+}
+
+static void
+emit_json_word (WORD_DESC *w)
+{
+  printf ("{\"text\":");
+  emit_json_string (w ? w->word : "");
+  printf (",\"flags\":%d}", w ? w->flags : 0);
+}
+
+static const char *
+redirect_instruction_name (enum r_instruction i)
+{
+  switch (i)
+    {
+    case r_output_direction:		return "output";
+    case r_input_direction:		return "input";
+    case r_inputa_direction:		return "inputa";
+    case r_appending_to:		return "append";
+    case r_reading_until:		return "heredoc";
+    case r_deblank_reading_until:	return "heredoc_dash";
+    case r_reading_string:		return "herestring";
+    case r_duplicating_input:		return "dup_input";
+    case r_duplicating_output:		return "dup_output";
+    case r_duplicating_input_word:	return "dup_input_word";
+    case r_duplicating_output_word:	return "dup_output_word";
+    case r_close_this:			return "close";
+    case r_err_and_out:			return "err_and_out";
+    case r_append_err_and_out:		return "append_err_and_out";
+    case r_input_output:		return "input_output";
+    case r_output_force:		return "output_force";
+    case r_move_input:			return "move_input";
+    case r_move_output:			return "move_output";
+    case r_move_input_word:		return "move_input_word";
+    case r_move_output_word:		return "move_output_word";
+    default:				return "other";
+    }
+}
+
+/* The redirectee is a union: a file descriptor for the dup/close/move forms
+   that take a number, and a word for everything else. Reading the wrong arm
+   would dereference an integer. */
+static int
+redirect_has_word (enum r_instruction i)
+{
+  switch (i)
+    {
+    case r_duplicating_input:
+    case r_duplicating_output:
+    case r_close_this:
+    case r_move_input:
+    case r_move_output:
+      return 0;
+    default:
+      return 1;
+    }
+}
+
+static void
+emit_json_redirects (REDIRECT *redirects)
+{
+  REDIRECT *r;
+
+  putchar ('[');
+  for (r = redirects; r; r = r->next)
+    {
+      printf ("{\"instruction\":\"%s\",\"redirector\":%d,",
+	      redirect_instruction_name (r->instruction), r->redirector.dest);
+      if (redirect_has_word (r->instruction))
+	{
+	  printf ("\"word\":");
+	  emit_json_word (r->redirectee.filename);
+	}
+      else
+	printf ("\"fd\":%d", r->redirectee.dest);
+      putchar ('}');
+      if (r->next)
+	putchar (',');
+    }
+  putchar (']');
+}
+
+static void
+emit_json_connector (int connector)
+{
+  switch (connector)
+    {
+    case '|':		printf ("\"|\""); break;
+    case '&':		printf ("\"&\""); break;
+    case ';':		printf ("\";\""); break;
+    case AND_AND:	printf ("\"&&\""); break;
+    case OR_OR:		printf ("\"||\""); break;
+    default:		printf ("\"%c\"", connector); break;
+    }
+}
+
+static const char *
+command_kind_name (enum command_type t)
+{
+  switch (t)
+    {
+    case cm_for:		return "for";
+    case cm_case:		return "case";
+    case cm_while:		return "while";
+    case cm_if:			return "if";
+    case cm_simple:		return "simple";
+    case cm_select:		return "select";
+    case cm_connection:		return "connection";
+    case cm_function_def:	return "function_def";
+    case cm_until:		return "until";
+    case cm_group:		return "group";
+    case cm_arith:		return "arith";
+    case cm_cond:		return "cond";
+    case cm_arith_for:		return "arith_for";
+    case cm_subshell:		return "subshell";
+    case cm_coproc:		return "coproc";
+    default:			return "other";
+    }
+}
+
+static void
+emit_json_command (COMMAND *command)
+{
+  WORD_LIST *w;
+
+  if (command == 0)
+    {
+      printf ("null");
+      return;
+    }
+
+  switch (command->type)
+    {
+    case cm_simple:
+      printf ("{\"kind\":\"simple\",\"line\":%d,\"words\":[",
+	      command->value.Simple->line);
+      for (w = command->value.Simple->words; w; w = w->next)
+	{
+	  emit_json_word (w->word);
+	  if (w->next)
+	    putchar (',');
+	}
+      printf ("],\"redirects\":");
+      emit_json_redirects (command->value.Simple->redirects);
+      putchar ('}');
+      break;
+
+    case cm_connection:
+      printf ("{\"kind\":\"connection\",\"connector\":");
+      emit_json_connector (command->value.Connection->connector);
+      printf (",\"first\":");
+      emit_json_command (command->value.Connection->first);
+      printf (",\"second\":");
+      emit_json_command (command->value.Connection->second);
+      putchar ('}');
+      break;
+
+    /* Remaining node types are reported by kind so a consumer can tell that
+       something it does not model is present, rather than seeing nothing. No
+       line is emitted: COMMAND.line is only populated for the node types
+       modeled above, and these carry theirs on their own structures. */
+    default:
+      printf ("{\"kind\":\"%s\",\"redirects\":",
+	      command_kind_name (command->type));
+      emit_json_redirects (command->redirects);
+      putchar ('}');
+      break;
+    }
+}
+
+/* Print COMMAND as a single line of JSON on stdout. */
+void
+emit_command_json (COMMAND *command)
+{
+  printf ("{\"rash_ast_version\":1,\"command\":");
+  emit_json_command (command);
+  printf ("}\n");
+}

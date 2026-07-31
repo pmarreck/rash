@@ -236,6 +236,7 @@ int wordexp_only = 0;		/* Do word expansion only */
 int protected_mode = 0;		/* No command substitution with --wordexp */
 
 int pretty_print_mode = 0;	/* pretty-print a shell script */
+int emit_ast_mode = 0;		/* emit the parse tree as JSON, do not execute */
 
 #if defined (STRICT_POSIX)
 int posixly_correct = 1;	/* Non-zero means posix.2 superset. */
@@ -260,6 +261,7 @@ static const struct {
   { "dump-po-strings", Int, &dump_po_strings, (char **)0x0 },
   { "dump-strings", Int, &dump_translatable_strings, (char **)0x0 },
 #endif
+  { "emit-ast", Int, &emit_ast_mode, (char **)0x0 },
   { "help", Int, &want_initial_help, (char **)0x0 },
   { "init-file", Charp, (int *)0x0, &bashrc_file },
   { "login", Int, &make_login_shell, (char **)0x0 },
@@ -770,7 +772,7 @@ main (int argc, char **argv, char **env)
 	 the reader-loop path -- which is exactly what a non-ONESHOT build has
 	 always done for -c. Falling through keeps both builds in agreement
 	 rather than letting an efficiency switch change observable semantics. */
-      if (pretty_print_mode == 0)
+      if (pretty_print_mode == 0 && emit_ast_mode == 0)
 	{
 	  executing = shell_initialized = 1;
 	  run_one_command (command_execution_string);
@@ -828,19 +830,19 @@ main (int argc, char **argv, char **env)
 
   shell_initialized = 1;
 
-  if (pretty_print_mode && interactive_shell)
+  if ((pretty_print_mode || emit_ast_mode) && interactive_shell)
     {
       internal_warning (_("pretty-printing mode ignored in interactive shells"));
-      pretty_print_mode = 0;
+      pretty_print_mode = emit_ast_mode = 0;
     }
-  if (pretty_print_mode)
+  if (pretty_print_mode || emit_ast_mode)
     {
       /* Only -c carries an expectation that the command will be run; a script
 	 file or standard input is already understood to be printed rather than
 	 executed, so a diagnostic there would be noise. */
       if (command_execution_string)
 	internal_warning (_("-c command was printed, not executed"));
-      exit_shell (pretty_print_loop ());
+      exit_shell (emit_ast_mode ? emit_ast_loop () : pretty_print_loop ());
     }
 
   /* Read commands until exit condition. */

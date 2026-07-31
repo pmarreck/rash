@@ -75,3 +75,58 @@ classifier over invocation forms rather than only the route that changed.
 reportable on its own terms, with no reference to Rash, and should go to
 `bug-bash@gnu.org` from a pristine clone. The stderr diagnostic is a Rash
 choice and is not part of that report. Tracked in `PLAN.md`.
+
+---
+
+## 2. `--emit-ast` writes the parse tree as JSON
+
+**Upstream behavior.** No such option exists.
+
+**Rash behavior.** `--emit-ast` parses commands from a script file, standard
+input, or `-c`, writes each as one line of JSON on standard output, and exits
+without executing. It follows `--pretty-print` exactly on the `-c` question:
+printed, not run, with the non-execution announced on stderr for `-c` alone.
+
+**Why.** Every consumer of shell text — linters, security gates, agent
+harnesses — reimplements some slice of the grammar and can therefore disagree
+with the shell that actually executes. For a gate, analyzer-versus-executor
+divergence is the whole risk. Emitting from the `COMMAND *` the executor itself
+built makes that divergence *inexpressible* rather than merely unlikely, since
+there is only one parser involved.
+
+**Guarantees.**
+
+- *Never expands.* Words are emitted as written: `$x` stays `$x` and `$(cmd)`
+  stays `$(cmd)`. Expansion is a runtime act with side effects, and a tool that
+  reports a tree must not be able to run `$(rm -rf ...)`. A canary covers the
+  command-substitution case specifically.
+- *Never executes*, on any input path, proven by canary on `-c`, standard
+  input, and a script file.
+- *Versioned.* Every line carries `"rash_ast_version":1` so a consumer fails
+  loudly on schema change instead of silently misreading.
+
+**Schema, version 1.** `simple` and `connection` nodes are fully modeled:
+words as `{"text","flags"}` with the raw `W_*` bits, per-command `redirects[]`
+carrying a named `instruction`, the `redirector` descriptor, and either a
+`word` or an `fd` depending on the redirection form. All other node types
+(`for`, `if`, `group`, `subshell`, `case`, `function_def`, `coproc`, …) report
+their `kind` and redirects, so a consumer can tell that something it does not
+model is present rather than seeing nothing at all.
+
+Words carry no position and non-`simple` nodes carry no line number, because
+bash does not record them: `WORD_DESC` holds only text and flags, and
+`COMMAND.line` is populated only for the node types modeled here. Emitting a
+line number for the others would report uninitialized memory. Column positions
+do not exist anywhere in the tree and would require threading offsets through
+the lexer.
+
+**POSIX.** Not implicated. This is a new GNU-style long option; `-c`, `-n`, and
+every POSIX-specified behavior are unchanged.
+
+**Tests.** `tests/emitast.tests`, `tests/emitast.right`, `tests/run-emitast` —
+non-execution on all three input paths, the command-substitution canary, the
+stderr announcement being present for `-c` and absent elsewhere, pipeline and
+redirect structure, and unexpanded words. `tests/invocation.right` was updated
+because the option legitimately appears in the usage output.
+
+**Upstream status.** Rash-specific. Not proposed upstream.

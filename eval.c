@@ -421,3 +421,31 @@ read_command (void)
 
   return (result);
 }
+
+/* Emit each parsed command as JSON without executing it. Mirrors
+   pretty_print_loop; only the emitter differs. */
+int
+emit_ast_loop (void)
+{
+  COMMAND *current_command;
+  int code;
+
+  unset_readahead_token ();
+  while (EOF_Reached == 0)
+    {
+      code = setjmp_nosigs (top_level);
+      if (code)
+	return (EXECUTION_FAILURE);
+      if (read_command () == 0)
+	{
+	  current_command = global_command;
+	  global_command = 0;
+	  if (current_command)
+	    emit_command_json (current_command);
+	  dispose_command (current_command);
+	}
+      else
+	return (EXECUTION_FAILURE);
+    }
+  return (EXECUTION_SUCCESS);
+}

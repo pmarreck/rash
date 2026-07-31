@@ -1,0 +1,65 @@
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# --emit-ast writes the parse tree as JSON and never executes. It follows
+# --pretty-print exactly: printed on every input path including -c, with the
+# non-execution announced on stderr for -c alone, where a caller might expect
+# the command to run. Words are emitted as written, unexpanded: expansion is a
+# runtime act with side effects, so a tool that reports a tree must never be
+# able to run $(...).
+#
+# Assertions are on structure, not on formatting, so whitespace changes in the
+# emitter do not silently break the suite.
+
+CANARY=${TMPDIR:-/tmp}/rash-emitast-$$
+
+has()
+{
+	case "$1" in
+	*"$2"*)	echo "$3: yes" ;;
+	*)	echo "$3: NO" ;;
+	esac
+}
+
+# Nothing may execute, on any input path.
+rm -f "$CANARY"
+${THIS_SH} --emit-ast -c "echo x > $CANARY" >/dev/null 2>&1
+echo "echo x > $CANARY" | ${THIS_SH} --emit-ast >/dev/null 2>&1
+echo "echo x > $CANARY" > ${CANARY}.sh
+${THIS_SH} --emit-ast ${CANARY}.sh >/dev/null 2>&1
+rm -f ${CANARY}.sh
+if [ -e "$CANARY" ]; then echo "execution: FAIL ran the command"; else echo "execution: none"; fi
+
+# A command substitution must not run even though it would be expanded later.
+rm -f "$CANARY"
+${THIS_SH} --emit-ast -c 'echo $(echo x > '"$CANARY"')' >/dev/null 2>&1
+if [ -e "$CANARY" ]; then echo "comsub: FAIL ran the substitution"; else echo "comsub: none"; fi
+
+# -c announces non-execution; the other paths stay silent.
+err=$(${THIS_SH} --emit-ast -c 'echo hi' 2>&1 >/dev/null)
+has "$err" "not executed" "stderr -c"
+err=$(echo 'echo hi' | ${THIS_SH} --emit-ast 2>&1 >/dev/null)
+case "$err" in "") echo "stderr stdin: silent" ;; *) echo "stderr stdin: NOISY" ;; esac
+
+# Structure the redirect rule needs: pipeline shape plus per-command redirects.
+out=$(${THIS_SH} --emit-ast -c 'printf x | tee f < g' 2>/dev/null)
+has "$out" '"rash_ast_version":1' "version"
+has "$out" '"kind":"connection"' "connection"
+has "$out" '"connector":"|"' "connector"
+has "$out" '"kind":"simple"' "simple"
+has "$out" '"instruction":"input"' "input redirect"
+
+# Words are emitted unexpanded.
+out=$(${THIS_SH} --emit-ast -c 'echo $x $(date)' 2>/dev/null)
+has "$out" '$x' "unexpanded var"
+has "$out" '$(date)' "unexpanded comsub"

@@ -122,3 +122,6 @@ examples/loadables/uname
 examples/loadables/unlink
 examples/loadables/whoami
 inbox
+
+# nix build output symlink
+result

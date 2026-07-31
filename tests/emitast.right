@@ -1,0 +1,11 @@
+execution: none
+comsub: none
+stderr -c: yes
+stderr stdin: silent
+version: yes
+connection: yes
+connector: yes
+simple: yes
+input redirect: yes
+unexpanded var: yes
+unexpanded comsub: yes
