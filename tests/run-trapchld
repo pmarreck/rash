@@ -1,0 +1,2 @@
+${THIS_SH} ./trapchld.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} trapchld.right && rm -f ${BASH_TSTOUT}

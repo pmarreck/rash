@@ -1,0 +1,28 @@
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# The SIGCHLD trap runs once per reaped child. run_pending_traps used to run
+# the queued firings once and then continue to the next signal, so a child
+# reaped while the trap was executing queued a firing that nothing in that
+# pass came back for -- and at end of input nothing ever parsed again to
+# collect it. Statistical control, not proof: the loss was intermittent
+# (about one round in five here), so thirty clean rounds carry it past a
+# hundred to one. Only the losing-round count is printed, so timing never
+# reaches the expected output.
+
+losses=0
+for i in {1..30}; do
+	n=$(${THIS_SH} ./trapchld.sub 2>&1 | grep -c CHLD)
+	[ "$n" -eq 11 ] || losses=$((losses + 1))
+done
+echo "rounds with lost SIGCHLD trap firings: $losses"

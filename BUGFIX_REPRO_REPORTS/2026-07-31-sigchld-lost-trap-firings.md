@@ -1,21 +1,18 @@
-# SIGCHLD trap firings are lost when a foreground child is reaped
+# SIGCHLD trap firings are lost when a child is reaped during a SIGCHLD trap
 
-Reproduced on bash 5.3.15(1)-release, x86_64-pc-linux-gnu, Linux 6.18.
+Reproduced and fixed against bash 5.3.15(1)-release, x86_64-pc-linux-gnu.
 
 ## Summary
 
-The SIGCHLD trap is documented and implemented to run once per reaped child.
-`waitchld` passes the number of children reaped to `queue_sigchld_trap`, which
-accumulates it in `pending_traps[SIGCHLD]`, and `run_sigchld_trap` loops that
-many times — machinery that exists precisely so kernel signal coalescing cannot
+The SIGCHLD trap is meant to run once per reaped child, and bash implements
+that deliberately: `waitchld` passes the number of children reaped to
+`queue_sigchld_trap`, which accumulates into `pending_traps[SIGCHLD]`, and
+`run_sigchld_trap` loops that many times so kernel signal coalescing cannot
 lose a firing.
 
-Firings are lost anyway, intermittently, when background children are reaped in
-the same window as a **foreground** child. Roughly one run in five loses one
-firing under the reproduction below; occasionally two are lost.
-
-This is not a theoretical concern: bash's own `tests/trap8.sub` depends on the
-exact count and therefore fails intermittently, making `make tests` unreliable.
+Firings are lost anyway when a child is reaped *while a SIGCHLD trap is
+running*. `bash`'s own `tests/trap8.sub` depends on the exact count and fails
+intermittently as a result, making `make tests` unreliable.
 
 ## Reproduction
 
@@ -27,85 +24,82 @@ sleep 0.3
 wait
 ```
 
-Expected: 11 lines of `CHLD` (ten background children plus the foreground
-`sleep`). Observed: usually 11, intermittently 10, occasionally 9.
+Expect 11 `CHLD` lines. Intermittently 10, sometimes 9. Loop and count:
 
-Measured over 25 runs:
-
-```
-  1 run  fired  9 times
-  4 runs fired 10 times
- 20 runs fired 11 times
+```sh
+for i in {1..30}; do ./repro.sh 2>&1 | grep -c CHLD; done | sort -n | uniq -c
 ```
 
-A smaller version — one background child plus one foreground command — loses a
-firing roughly one run in twenty, so the rate scales with the number of
-children reaped in the window.
+Measured on an unmodified 5.3.15 build: 6 to 9 losing rounds out of 30.
+`tests/trap8.sub` itself loses a firing in 8 of 120 runs at 8-way parallelism.
 
-## Isolation
+## Cause
 
-Each variant run 20-30 times:
-
-| variant | result |
-|---|---|
-| 10 background children **and** a foreground `sleep` | loses 1-2 firings in ~25% of runs |
-| same, without `set -m` | loses 1 firing in ~15% of runs |
-| 10 background children, **no** foreground command | 20/20 correct, no loss |
-| 10 background children, foreground **busy loop** instead of a child | 25/25 correct, no loss |
-| 1 background child plus a foreground command | loses 1 firing in ~5% of runs |
-
-Two conclusions follow. Job control is not required — the loss occurs without
-`set -m`. And merely being outside the `wait` builtin is not sufficient: a
-foreground busy loop, which also leaves `this_shell_builtin != wait_builtin`,
-never loses a firing. **Reaping a foreground child is the trigger.**
-
-Staggering the exits (background child exiting well before, during, or
-simultaneously with the foreground child) did not change the outcome in 30 runs
-each, so this is not simple simultaneity.
-
-## Where it is not
-
-With no foreground command, `waitchld` takes the
-`this_shell_builtin == wait_builtin` branch in `jobs.c` and calls
-`run_sigchld_trap (children_exited)` directly, never touching `pending_traps`.
-That configuration never loses a firing, which places the defect in the queued
-path rather than in `run_sigchld_trap`'s loop or in the reap count itself.
-
-With a foreground child, the reap happens inside `wait_for`, so the trap is
-queued via `queue_sigchld_trap` instead. The count does reach
-`pending_traps[SIGCHLD]`; the loss is downstream of queueing.
-
-I was not able to isolate the exact statement responsible, and I would rather
-report the measurement than guess at a patch.
-
-## One candidate, offered as an observation rather than a fix
-
-`run_pending_traps` reads and clears the counter in two steps:
+`run_pending_traps` in `trap.c` handles a pending SIGCHLD like this:
 
 ```c
+	      sigmodes[SIGCHLD] |= SIG_INPROGRESS;
+	      evalnest++;
 	      x = pending_traps[sig];
 	      pending_traps[sig] = 0;
 	      run_sigchld_trap (x);	/* use as counter */
+	      running_trap = 0;
+	      evalnest--;
+	      sigmodes[SIGCHLD] &= ~SIG_INPROGRESS;
+	      /* continue here rather than reset pending_traps[SIGCHLD] below in
+		 case there are recursive calls to run_pending_traps and children
+		 have been reaped while run_sigchld_trap was running. */
+	      continue;
 ```
 
-`pending_traps` is a plain `int` array incremented from the SIGCHLD handler via
-`queue_sigchld_trap`, so a child reaped between the read and the clear has its
-increment discarded. Blocking SIGCHLD across those two statements is a correct
-guard for that specific window.
+While `run_sigchld_trap` executes the trap action, more children can be reaped.
+Those reaps queue additional firings into `pending_traps[SIGCHLD]`, and a
+re-entrant `run_pending_traps` correctly declines to consume them — the
+`SIG_INPROGRESS` branch leaves the counter alone on purpose.
 
-However, doing so did **not** measurably change the loss rate in this
-reproduction (9 losing rounds out of 30 before, 7 out of 30 after — within
-noise of each other), so whatever dominates here is elsewhere. I mention the
-window only because it appears genuinely unsafe on its own terms, not because
-closing it fixed anything.
+But the `continue` above advances the enclosing `for (sig = 1; sig < NSIG;
+sig++)` loop to the **next signal**. Nothing revisits SIGCHLD in that pass, so
+the newly queued firings wait for the next call to `run_pending_traps`, which
+happens in `parse_command` on the way to reading another command. At end of
+input nothing parses again, and the firings are never run. The shell exits with
+`pending_traps[SIGCHLD]` still non-zero.
 
-There is also existing evidence in the tree that this area has lost traps
-before. `jobs.c` carries the comment:
+This was confirmed by instrumentation rather than inference: with counters at
+each accounting point, the number of children reaped was *always* correct, the
+trap ran exactly as many times as it was asked to, and the residual
+`pending_traps[SIGCHLD]` at exit was exactly equal to the number of missing
+`CHLD` lines in every run. A counter on the re-entrant `SIG_INPROGRESS` branch
+predicted the loss exactly: one bail, one missing firing.
+
+This also explains the trigger. With only background children and a closing
+`wait`, `waitchld` takes the `this_shell_builtin == wait_builtin` branch and
+runs the trap synchronously without ever queueing, and no firing is lost. A
+*foreground* child is what places a reap inside the trap-execution window.
+
+## Fix
+
+Drain the counter where the existing comment already intends it to be drained:
 
 ```c
-	  /* This was trap_handler (SIGCHLD) but that can lose traps if
-	     children_exited > 1 */
+	      /* Drain here rather than once: a child reaped while the trap was
+	         running queues another firing, and the `continue' below advances
+	         to the next signal, so nothing would revisit SIGCHLD in this
+	         pass. Bounded -- children are finite. */
+	      while ((x = pending_traps[sig]) > 0)
+		{
+		  pending_traps[sig] = 0;
+		  run_sigchld_trap (x);	/* use as counter */
+		}
 ```
 
-and `run_pending_traps` has a `/* whoops -- print warning? */` branch for
-SIGCHLD arriving while a SIGCHLD trap is in progress.
+`if` becomes a bounded `while`; the loop terminates because the number of
+children is finite. Nothing else changes.
+
+## Result
+
+| | before | after |
+|---|---|---|
+| reproduction above, 60 rounds | 6-9 losing rounds per 30 | 60/60 correct |
+| `tests/trap8.sub`, 120 runs at 8-way parallelism | 8/120 lost a firing | 120/120 correct |
+
+The complete bash test suite passes with the change applied.

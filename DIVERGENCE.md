@@ -130,3 +130,35 @@ redirect structure, and unexpanded words. `tests/invocation.right` was updated
 because the option legitimately appears in the usage output.
 
 **Upstream status.** Rash-specific. Not proposed upstream.
+
+---
+
+## 3. SIGCHLD trap firings are not lost when a child is reaped during a trap
+
+**Upstream behavior.** A child reaped while a SIGCHLD trap is executing queues
+another firing that nothing in that pass comes back for, because the branch
+`continue`s to the next signal. At end of input nothing parses again, so the
+shell exits with the firing unrun. Roughly 20% of runs of the reproduction lose
+at least one; bash's own `tests/trap8.sub` loses one in 8 of 120 runs.
+
+**Rash behavior.** The counter is drained in a bounded loop, so every reaped
+child gets its firing.
+
+**Why.** Bash already guarantees one trap per reaped child on purpose —
+`waitchld` counts reaps, `queue_sigchld_trap` accumulates, `run_sigchld_trap`
+loops. The gap defeats machinery that exists specifically to close it, and it
+makes bash's own test suite intermittently red, which is worse than the bug: a
+suite that fails at random trains everyone to ignore it.
+
+**Implementation.** One `if` became a bounded `while` in `run_pending_traps`,
+at the site whose existing comment already says it is leaving the counter for
+children reaped during the trap. Nine lines, four of them comment.
+
+**POSIX.** Not implicated; this makes bash match its own documented behavior.
+
+**Tests.** `tests/trapchld.tests`, `tests/trapchld.sub`, `tests/trapchld.right`,
+`tests/run-trapchld` — thirty rounds, decisive past a hundred to one against the
+measured pre-fix rate. `tests/trap8.sub` also stops failing intermittently.
+
+**Upstream status.** Ready to send, with the patch:
+`BUGFIX_REPRO_REPORTS/2026-07-31-sigchld-lost-trap-firings.md`.

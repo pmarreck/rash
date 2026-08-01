@@ -406,9 +406,15 @@ run_pending_traps (void)
 	      /* We modify evalnest here even though run_sigchld_trap can run
 		 the trap action more than once */
 	      evalnest++;
-	      x = pending_traps[sig];
-	      pending_traps[sig] = 0;
-	      run_sigchld_trap (x);	/* use as counter */
+	      /* Drain here rather than once: a child reaped while the trap was
+	         running queues another firing, and the `continue' below advances
+	         to the next signal, so nothing would revisit SIGCHLD in this
+	         pass. Bounded -- children are finite. */
+	      while ((x = pending_traps[sig]) > 0)
+		{
+		  pending_traps[sig] = 0;
+		  run_sigchld_trap (x);	/* use as counter */
+		}
 	      running_trap = 0;
 	      evalnest--;
 	      sigmodes[SIGCHLD] &= ~SIG_INPROGRESS;

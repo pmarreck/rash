@@ -1,0 +1,7 @@
+# Background children exit while a foreground command holds the shell in
+# wait_for, so their traps are queued rather than run by the wait builtin.
+set -m
+trap 'echo CHLD' SIGCHLD
+for i in {1..10}; do sleep 0.3 & done
+sleep 0.3
+wait
