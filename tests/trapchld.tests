@@ -26,3 +26,29 @@ for i in {1..30}; do
 	[ "$n" -eq 11 ] || losses=$((losses + 1))
 done
 echo "rounds with lost SIGCHLD trap firings: $losses"
+
+# A second mechanism loses firings on the other dispatch path. waitchld runs
+# the SIGCHLD trap directly when the wait builtin reaps a child, and that call
+# never marks SIGCHLD in progress, so a run_pending_traps entered from inside
+# that trap matched neither in-progress branch and fell through to the
+# bad-handler branch, which warns and discards the queued firings.
+#
+# That branch announces itself, so its warning is asserted directly. This is a
+# canary, not a statistical gate: the natural failure rate on an optimized
+# build is under one round in a thousand and varies with machine load, so no
+# affordable number of rounds makes its absence decisive. The evidence for the
+# fix is the captured instrumentation in BUGFIX_REPRO_REPORTS, not this loop.
+# The workload leaves job control off, which is what steers waitchld to the
+# direct call; trapchld.sub above turns it on and takes the queued path.
+warned=0
+losses=0
+for i in {1..30}; do
+	out=$(${THIS_SH} ./trapchld2.sub 2>&1)
+	case $out in
+	*"bad value in trap_list"*) warned=$((warned + 1)) ;;
+	esac
+	n=$(echo "$out" | grep -c CHLD)
+	[ "$n" -eq 11 ] || losses=$((losses + 1))
+done
+echo "job-control-off rounds discarding a queued firing: $warned"
+echo "job-control-off rounds with lost SIGCHLD trap firings: $losses"

@@ -4265,6 +4265,7 @@ itrace("waitchld: waitpid returns %d block = %d children_exited = %d", pid, bloc
 	  o = jobs_list_frozen;
 	  jobs_list_frozen = 1;
 	  run_sigchld_trap (children_exited);	/* XXX */
+	  run_deferred_sigchld_traps ();
 	  jobs_list_frozen = o;
 	}
       else

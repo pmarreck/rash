@@ -161,4 +161,68 @@ children reaped during the trap. Nine lines, four of them comment.
 measured pre-fix rate. `tests/trap8.sub` also stops failing intermittently.
 
 **Upstream status.** Ready to send, with the patch:
-`BUGFIX_REPRO_REPORTS/2026-07-31-sigchld-lost-trap-firings.md`.
+`BUGFIX_REPRO_REPORTS/2026-07-31-sigchld-lost-trap-firings.md`. Send it
+together with entry 4, which fixes the second half of the same contract.
+
+---
+
+## 4. SIGCHLD trap firings are not discarded on the direct dispatch path
+
+**Upstream behavior.** `waitchld` runs the SIGCHLD trap two different ways: it
+queues firings for `run_pending_traps`, or, when the `wait` builtin reaps the
+child, it calls `run_sigchld_trap` **directly**. The direct call sets
+`running_trap` and installs the `IMPOSSIBLE_TRAP_HANDLER` sentinel but never
+sets `SIG_INPROGRESS`, and its dispatch chain never checks whether firings are
+already queued. So a trap dispatched directly while `pending_traps[SIGCHLD]` is
+non-zero re-enters `run_pending_traps` from its own trap body, matches none of
+the three SIGCHLD branches, and falls through to the generic bad-handler
+branch — which prints `run_pending_traps: bad value in trap_list[17]` and then
+discards the queued firings. Upstream left a TODO for exactly this at
+`trap.c:354`: *"could check for running the trap handler for the same signal
+here."*
+
+**Rash behavior.** Firings queued while a SIGCHLD trap is executing are kept
+and then run, on both dispatch paths.
+
+**Why.** Same contract as entry 3 — one trap per reaped child — broken by the
+other dispatch path. Entry 3's fix drains the queued path; nothing drained this
+one. The failure is also silent in its consequence and noisy in the wrong
+place: the user loses a trap firing and gets an internal warning about a bad
+pointer value, which reads like memory corruption rather than a lost signal.
+
+**Implementation.** Two changes, because stopping the discard is not the same
+as running what was kept.
+
+1. The branch that recognizes "a SIGCHLD trap is already running" tested
+   `SIG_INPROGRESS` as well as the sentinel. That was too narrow: the sentinel
+   is installed only for the duration of `run_sigchld_trap` and restored when
+   it unwinds, so it alone means a SIGCHLD trap is executing. Dropping the
+   extra condition makes the recursive call defer the firings instead of
+   discarding them.
+2. Deferring alone converted a loud loss into a silent one — measured, not
+   assumed: instrumentation showed `pending_at_exit=1` with the trap having run
+   ten times instead of eleven. Branch 1 has a drain loop for the queued path;
+   the direct path had none, so `run_deferred_sigchld_traps` drains it at that
+   call site after the trap returns.
+
+**POSIX.** Not implicated; this makes bash match its own documented behavior.
+
+**Tests.** `tests/trapchld2.sub` plus the second section of
+`tests/trapchld.tests` — the same workload with job control left off, which is
+what steers `waitchld` to the direct call. Two assertions: the exact firing
+count, and the absence of the `bad value in trap_list` warning that the
+discarding branch prints.
+
+Honest limit on the evidence: the count assertion is a strong detector of the
+contract being broken at all (11 of 60 rounds on stock 5.3.15), but the natural
+rate of *this specific* mechanism on an optimized build is under one round in a
+thousand and moves with machine load, so no affordable number of rounds makes
+its absence decisive. It is a canary, not a statistical gate. What justifies
+the fix is the captured instrumentation in
+`BUGFIX_REPRO_REPORTS/2026-08-04-sigchld-discarded-on-direct-dispatch.md`:
+individual failing runs recorded with counters at every accounting point,
+showing the discard happening and the firing count coming up short.
+
+**Upstream status.** Not yet sent. Belongs in the same message as entry 3.
+Found by an independent verifier (a Codex session) rejecting entry 3's fix as
+incomplete; reproduced and diagnosed here from its lead.

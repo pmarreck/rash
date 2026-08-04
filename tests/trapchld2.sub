@@ -1,0 +1,8 @@
+# Same shape as trapchld.sub but with job control left off, which is the
+# default for a non-interactive shell. Without it waitchld reaches the branch
+# that runs the SIGCHLD trap directly for the wait builtin, and that call is
+# the one that never marked SIGCHLD in progress.
+trap 'echo CHLD' SIGCHLD
+for i in {1..10}; do sleep 0.3 & done
+sleep 0.3
+wait

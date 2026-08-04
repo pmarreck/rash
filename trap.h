@@ -73,6 +73,7 @@ extern void initialize_traps (void);
 extern void run_pending_traps (void);
 
 extern void queue_sigchld_trap (int);
+extern void run_deferred_sigchld_traps (void);
 extern void set_impossible_sigchld_trap (void);
 extern void set_sigchld_trap (const char *);
 

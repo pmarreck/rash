@@ -424,11 +424,16 @@ run_pending_traps (void)
 	      continue;
 	    }
 	  else if (sig == SIGCHLD &&
-		   trap_list[SIGCHLD] == (char *)IMPOSSIBLE_TRAP_HANDLER &&
-		   (sigmodes[SIGCHLD] & SIG_INPROGRESS) != 0)
+		   trap_list[SIGCHLD] == (char *)IMPOSSIBLE_TRAP_HANDLER)
 	    {
 	      /* This can happen when run_pending_traps is called while
-		 running a SIGCHLD trap handler. */
+		 running a SIGCHLD trap handler.  The sentinel is installed
+		 only for the duration of run_sigchld_trap and restored when
+		 it unwinds, so it alone means a SIGCHLD trap is executing.
+		 Testing SIG_INPROGRESS as well was too narrow: waitchld
+		 calls run_sigchld_trap directly without setting it, and the
+		 queued firings then fell through to the bad-handler branch
+		 below, which warns and discards them. */
 	      running_trap = 0;
 	      /* want to leave pending_traps[SIGCHLD] alone here */
 	      continue;					/* XXX */
@@ -721,6 +726,23 @@ set_impossible_sigchld_trap (void)
   restore_default_signal (SIGCHLD);
   change_signal (SIGCHLD, (char *)IMPOSSIBLE_TRAP_HANDLER);
   sigmodes[SIGCHLD] &= ~SIG_TRAPPED;	/* uw_maybe_set_sigchld_trap checks this */
+}
+
+/* Run SIGCHLD trap firings that were queued while a SIGCHLD trap was already
+   executing.  run_pending_traps deliberately leaves pending_traps[SIGCHLD]
+   alone when it is entered recursively from a running SIGCHLD trap, so the
+   dispatch site drains them here once that trap has finished; otherwise
+   nothing revisits them and they are never run. */
+void
+run_deferred_sigchld_traps (void)
+{
+  int x;
+
+  while ((x = pending_traps[SIGCHLD]) > 0)
+    {
+      pending_traps[SIGCHLD] = 0;
+      run_sigchld_trap (x);		/* use as counter */
+    }
 }
 
 /* Act as if we received SIGCHLD NCHILD times and increment
