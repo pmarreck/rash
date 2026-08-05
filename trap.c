@@ -409,10 +409,23 @@ run_pending_traps (void)
 	      /* Drain here rather than once: a child reaped while the trap was
 	         running queues another firing, and the `continue' below advances
 	         to the next signal, so nothing would revisit SIGCHLD in this
-	         pass. Bounded -- children are finite. */
-	      while ((x = pending_traps[sig]) > 0)
+	         pass. Bounded -- children are finite.
+
+	         SIGCHLD is blocked across the read and the clear because the
+	         handler increments this counter too: a reap landing between
+	         them would have its increment zeroed without ever being seen
+	         here. It is unblocked before the trap body runs, so delivery
+	         during trap execution is unchanged. */
+	      for (;;)
 		{
+		  sigset_t chld_set, chld_oset;
+
+		  BLOCK_CHILD (chld_set, chld_oset);
+		  x = pending_traps[sig];
 		  pending_traps[sig] = 0;
+		  UNBLOCK_CHILD (chld_oset);
+		  if (x <= 0)
+		    break;
 		  run_sigchld_trap (x);	/* use as counter */
 		}
 	      running_trap = 0;
@@ -738,9 +751,16 @@ run_deferred_sigchld_traps (void)
 {
   int x;
 
-  while ((x = pending_traps[SIGCHLD]) > 0)
+  for (;;)
     {
+      sigset_t chld_set, chld_oset;
+
+      BLOCK_CHILD (chld_set, chld_oset);
+      x = pending_traps[SIGCHLD];
       pending_traps[SIGCHLD] = 0;
+      UNBLOCK_CHILD (chld_oset);
+      if (x <= 0)
+	break;
       run_sigchld_trap (x);		/* use as counter */
     }
 }

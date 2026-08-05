@@ -231,3 +231,57 @@ worse than the bug. It is recorded in `PLAN.md` with its counter evidence.
 **Upstream status.** Not yet sent. Belongs in the same message as entry 3.
 Found by an independent verifier (a Codex session) rejecting entry 3's fix as
 incomplete; reproduced and diagnosed here from its lead.
+
+---
+
+## 5. SIGCHLD firings queued by the handler survive the drain's read-then-clear
+
+**Upstream behavior.** `pending_traps[SIGCHLD]` is a counter incremented from
+two contexts: `sigchld_handler` calls `waitchld` directly, and main-context
+paths do too. The drain in `run_pending_traps` consumes it with a plain
+read-then-clear (`x = pending_traps[sig]; pending_traps[sig] = 0;`). A
+SIGCHLD delivered between those two statements increments the counter, and
+the clear then zeroes an increment never captured in `x`. The firing is
+neither run nor left pending, and nothing diagnostic is printed. Every other
+signal uses `pending_traps` as a flag, where this pattern is harmless;
+SIGCHLD is the only counting signal, and a count is what read-then-clear
+cannot handle.
+
+**Rash behavior.** The read and clear are atomic with respect to the handler:
+both drain sites (`run_pending_traps` and `run_deferred_sigchld_traps`) hold
+`BLOCK_CHILD` across the two-line window, releasing it before the trap body
+runs so delivery semantics during trap execution are unchanged.
+
+**Why.** Same contract as entries 3 and 4, broken a third way. This one is the
+quietest of the three: no warning, nothing pending at exit, and a rate that
+only becomes measurable under CPU load — which made it the one that kept the
+Zig-compiled test suite intermittently red after the other two were fixed.
+
+**Evidence.** Diagnosed by detector, not inference. The shell is
+single-threaded, so a nested `queue_sigchld_trap` while main context is inside
+a flagged window can only be the signal handler. Across 8000 loaded rounds of
+the self-spawning probe: 15 losses, 14 carrying a drain-window hit, and the
+write-side window hit zero times (main-context queueing is already covered by
+`queue_sigchld` deferral and the `wait_for` `BLOCK_CHILD` sections). With the
+window sealed, the same campaign produced zero losses and zero hits —
+fifteen-to-zero against its own detector. The write side was left untouched
+on that evidence.
+
+This window was suspected on day one and wrongly "ruled out" when guarding it
+moved 9-of-30 to 7-of-30 — a null result measured while entry 3's mechanism,
+twenty times more frequent, dominated. The independent verifier that reported
+the same guard working was discounted for the same reason. It was right.
+
+**POSIX.** Not implicated; blocking a signal across two statements changes no
+observable semantics except the absence of the loss.
+
+**Tests.** The count assertion in `tests/trapchld.tests` over
+`tests/trapchld2.sub`, restored once this landed — it was deliberately held
+out while this class was open, because a gate that flakes on an unfixed bug
+trains everyone to ignore it. With all three classes closed it is decisive
+again: 766-of-2000 (stock), 14-of-2000 (entry 3's fix only), 0 thereafter.
+
+**Upstream status.** Belongs in the same message as entries 3 and 4;
+`BUGFIX_REPRO_REPORTS/2026-08-05-sigchld-lost-update-drain-window.md` is the
+send-ready writeup, and `BUGFIX_REPRO_REPORTS/sigchld-fixes.patch` carries all
+three fixes as one reviewable diff.

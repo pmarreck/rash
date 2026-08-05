@@ -39,17 +39,23 @@ echo "rounds with lost SIGCHLD trap firings: $losses"
 # seven. Run serially on purpose -- parallel load suppresses the window rather
 # than widening it.
 #
-# The firing count is deliberately NOT asserted over this probe. A third,
-# undiagnosed loss remains (a reap accounted by waitchld that is neither queued
-# nor run: no warning, nothing left pending at exit) at roughly one round in a
-# thousand under load. Asserting the count here would make the suite
-# intermittently red for a bug that is not fixed yet, which is worse than the
-# bug. It is recorded in PLAN.md and in BUGFIX_REPRO_REPORTS with its counter
-# evidence; promote the count assertion here once it is closed.
+# The firing count is asserted as well. It was held out while a third loss
+# class was open -- a handler-context reap queued between the drain's read of
+# pending_traps[SIGCHLD] and its clear, zeroed without ever being captured;
+# that made this probe flake at roughly one round in a thousand under load,
+# and a gate that flakes on an unfixed bug trains everyone to ignore it. The
+# drains now hold BLOCK_CHILD across the read-then-clear, so all three known
+# classes are closed and the count is decisive again: 766 of 2000 rounds on
+# stock 5.3.15, 14 of 2000 with only the first fix, 0 with all three.
 warned=0
+losses=0
 for i in {1..1000}; do
-	case $(${THIS_SH} ./trapchld2.sub 2>&1) in
+	out=$(${THIS_SH} ./trapchld2.sub 2>&1)
+	case $out in
 	*"bad value in trap_list"*) warned=$((warned + 1)) ;;
 	esac
+	n=$(echo "$out" | grep -c CHLD)
+	[ "$n" -eq 10 ] || losses=$((losses + 1))
 done
 echo "self-spawn rounds discarding a queued firing: $warned"
+echo "self-spawn rounds with lost SIGCHLD trap firings: $losses"
