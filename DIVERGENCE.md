@@ -208,20 +208,25 @@ as running what was kept.
 **POSIX.** Not implicated; this makes bash match its own documented behavior.
 
 **Tests.** `tests/trapchld2.sub` plus the second section of
-`tests/trapchld.tests` — the same workload with job control left off, which is
-what steers `waitchld` to the direct call. Two assertions: the exact firing
-count, and the absence of the `bad value in trap_list` warning that the
-discarding branch prints.
+`tests/trapchld.tests` — a finite self-spawning trap with job control off and
+instant-exit children. What is asserted is that the discarding branch is never
+taken, which is what this fix guarantees and is decisive: over 2000 serial
+rounds it fires 14 times without the fix and 0 times with it. The test runs
+1000 rounds, expects about seven hits on a regression, and costs ~19 seconds.
 
-Honest limit on the evidence: the count assertion is a strong detector of the
-contract being broken at all (11 of 60 rounds on stock 5.3.15), but the natural
-rate of *this specific* mechanism on an optimized build is under one round in a
-thousand and moves with machine load, so no affordable number of rounds makes
-its absence decisive. It is a canary, not a statistical gate. What justifies
-the fix is the captured instrumentation in
-`BUGFIX_REPRO_REPORTS/2026-08-04-sigchld-discarded-on-direct-dispatch.md`:
-individual failing runs recorded with counters at every accounting point,
-showing the discard happening and the firing count coming up short.
+Two properties of the workload were established by measurement and are easy to
+get wrong. Sleeping children put the reaps outside the trap window — the same
+shape with `sleep 0.3` ran 8600 rounds clean against a build this probe fails
+on at 0.7%. And it must run serially: eight-way parallel load suppressed the
+window completely (0 in 800 rounds) rather than widening it.
+
+The firing **count** is deliberately not asserted over this probe. A third,
+undiagnosed loss survives both fixes at roughly one round in a thousand under
+load, with a signature distinct from either fixed mechanism: `waitchld` counts
+a reap that is then neither queued nor run directly, with no warning and
+nothing left pending at exit. Asserting the count here would make the suite
+intermittently red for an open bug, which this project has already decided is
+worse than the bug. It is recorded in `PLAN.md` with its counter evidence.
 
 **Upstream status.** Not yet sent. Belongs in the same message as entry 3.
 Found by an independent verifier (a Codex session) rejecting entry 3's fix as

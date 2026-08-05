@@ -32,22 +32,38 @@ warning: run_pending_traps: bad value in trap_list[17]: 0x5f0fed662920
 
 ```sh
 #!/bin/bash
-# job control left off, which is the default for a non-interactive shell
-trap 'echo CHLD' SIGCHLD
-for i in {1..10}; do sleep 0.3 & done
-sleep 0.3
+# Job control off (the default for a non-interactive shell) is what steers
+# waitchld to the direct call. Children exit instantly rather than sleeping, so
+# reaps land inside the trap window; the trap spawns a child on each of its
+# first four firings so reaping continues while the trap is already running.
+n=0
+trap 'printf "CHLD\n"; n=$((n+1)); if [ "$n" -le 4 ]; then (exit 0) & fi' CHLD
+i=0
+while [ "$i" -lt 6 ]; do (exit 0) & i=$((i+1)); done
 wait
 ```
 
-Expect 11 `CHLD` lines. Measured on stock 5.3.15: 11 of 60 rounds produced the
-wrong count. Job control matters — `set -m` steers `waitchld` away from the
-direct call, and the same script with it produced no losses in 1200 rounds.
+Exactly ten firings are owed: six initial children plus four spawned by the
+trap. Loop it and count:
 
-The rate of *this specific* mechanism on an optimized build is low, under one
-round in a thousand, and it moves with machine load: the same unmodified binary
-that lost a firing twice in 400 serial rounds later ran 8600 rounds clean. Do
-not treat a clean run as evidence of absence. The diagnosis below rests on
-captured instrumentation, not on the pass rate.
+```sh
+for i in $(seq 1 2000); do ./repro.sh 2>/dev/null | grep -c CHLD; done |
+	sort -n | uniq -c
+```
+
+Measured on stock 5.3.15, 2000 rounds: **766 rounds came up short**. Only 10 of
+those printed the `bad value in trap_list` warning, because two distinct
+mechanisms are in play — the drain-once bug reported in
+`2026-07-31-sigchld-lost-trap-firings.md` accounts for the bulk and is silent,
+and this one is the loud remainder. Applying that first patch alone drops the
+same probe to **14 rounds in 2000, every one of them warning**. This is what
+isolates the second mechanism.
+
+Two things about the workload matter, both established by measurement rather
+than assumed. Sleeping children put the reaps *outside* the trap window: the
+same shape with `sleep 0.3` children ran 8600 rounds clean on a build where
+this probe fails at 0.7%. And it must be run **serially** — eight-way parallel
+load suppressed the window entirely (0 in 800 rounds) rather than widening it.
 
 ## Cause
 
@@ -135,9 +151,22 @@ run_deferred_sigchld_traps (void)
 
 ## Result
 
+The reproduction above, 2000 serial rounds, across the three states:
+
+| build | rounds losing a firing | of those, warning |
+|---|---:|---:|
+| stock 5.3.15, neither patch | 766 / 2000 | 10 |
+| first patch only | 14 / 2000 | 14 |
+| both patches | **0 / 2000** | 0 |
+
+Each patch removes a distinct mechanism, and neither alone satisfies the
+contract. Seeing zero in 2000 rounds against a 0.7% baseline puts a surviving
+regression past a hundred thousand to one.
+
+Other checks:
+
 | | before | after |
 |---|---|---|
-| reproduction above, 60 rounds, stock 5.3.15 | 11 lost a firing | 0 |
 | captured failing runs | `b4=1`, `ran=10` of 11 | mechanism cannot be entered |
 | after the first change only | `b4=0` but `pending_at_exit=1`, `ran=10` | — |
 | self-spawning SIGCHLD trap, bounded | terminates | terminates identically |
@@ -149,3 +178,18 @@ unbounded one fails to terminate on both, so the loop introduces no new
 divergence.
 
 The complete bash test suite passes with both changes applied.
+
+## A further loss, not addressed here
+
+The same probe still comes up one short in roughly one round in a thousand
+**when the machine is under load**, by a mechanism distinct from either fix
+above. On those rounds `waitchld` accounts the reap and it is then neither
+queued nor run: no warning, and nothing left pending at exit. Counters read
+`reaped=10 queued=9 ran=9` against `reaped=10 queued=8 ran=10` on clean rounds.
+A counter placed on the `if (children_exited && ...)` dispatch condition itself
+showed the reap does enter the block, so it is being lost inside the dispatch
+chain rather than skipped by the guard.
+
+That is reported separately rather than bundled here, because the two fixes
+above are complete and independently justified for the mechanisms they close,
+and because it has not been diagnosed to the same standard.
