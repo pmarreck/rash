@@ -1,0 +1,70 @@
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Which name the shell answers to is decided from the name it was invoked
+# under, so it is checked over the whole set of invocation names rather than
+# the one case that motivated it. bash already dispatches on the basename of
+# $0 for `sh' and `rbash'; those keep answering as bash, because a script that
+# runs `sh' is asking for compatibility and should not be told it is talking
+# to a fork. Every other name, including an unknown one, answers as rash.
+
+case ${THIS_SH} in
+/*)	abs=${THIS_SH} ;;
+*)	abs=${PWD}/${THIS_SH} ;;
+esac
+
+tmp=${TMPDIR:-/tmp}/rashid$$
+mkdir -p $tmp
+
+# A symlink per name: this is the deployment shape the option exists for.
+for n in bash rash sh rbash unknownshell; do
+	ln -sf "$abs" $tmp/$n
+	echo "symlink $n: $($tmp/$n --about | sed 's/ .*//')"
+done
+
+# argv[0] without a matching file on disk, which is how a caller can lie about
+# the name. The identity must follow argv[0], not the executable's real path.
+echo "exec -a rash: $(${THIS_SH} -c 'exec -a rash "$0" --about' "$abs" | sed 's/ .*//')"
+echo "exec -a bash: $(${THIS_SH} -c 'exec -a bash "$0" --about' "$abs" | sed 's/ .*//')"
+
+# A login shell arrives with a leading `-' on argv[0], which must be stripped
+# before the name is matched.
+echo "login -bash: $(${THIS_SH} -c 'exec -a -bash "$0" --about' "$abs" | sed 's/ .*//')"
+echo "login -rash: $(${THIS_SH} -c 'exec -a -rash "$0" --about' "$abs" | sed 's/ .*//')"
+
+# The built binary is named bash, so an absolute path answers as bash.
+echo "absolute path: $($abs --about | sed 's/ .*//')"
+
+# One line, and it carries the version and the platform it was built for.
+${THIS_SH} -c 'exec -a rash "$0" --about' "$abs" | wc -l
+case $(${THIS_SH} -c 'exec -a rash "$0" --about' "$abs") in
+*"$(${THIS_SH} -c 'echo ${BASH_VERSION%%(*}')"*)	echo "carries version: yes" ;;
+*)						echo "carries version: no" ;;
+esac
+case $(${THIS_SH} -c 'exec -a rash "$0" --about' "$abs") in
+*"$(${THIS_SH} -c 'echo $MACHTYPE')"*)	echo "carries platform: yes" ;;
+*)					echo "carries platform: no" ;;
+esac
+
+# Masquerading has to be complete: answering as bash must not leave the fork's
+# name anywhere in the line.
+case $(${THIS_SH} -c 'exec -a bash "$0" --about' "$abs") in
+*rash*)	echo "bash identity leaks the fork name: yes" ;;
+*)	echo "bash identity leaks the fork name: no" ;;
+esac
+
+# --about reports and exits, like --version; it must not run a -c command.
+${THIS_SH} -c 'exec -a rash "$0" --about -c "echo RAN"' "$abs" > /dev/null 2>&1
+echo "ran the -c command: $(${THIS_SH} -c 'exec -a rash "$0" --about -c "echo RAN"' "$abs" 2>/dev/null | grep -c RAN)"
+
+rm -rf $tmp

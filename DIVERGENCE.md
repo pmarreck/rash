@@ -162,3 +162,61 @@ measured pre-fix rate. `tests/trap8.sub` also stops failing intermittently.
 
 **Upstream status.** Ready to send, with the patch:
 `BUGFIX_REPRO_REPORTS/2026-07-31-sigchld-lost-trap-firings.md`.
+
+---
+
+## 5. `--about`, and presenting as `bash` when invoked under that name
+
+*(Numbered 5 because entry 4 lands with the second SIGCHLD fix on a separate
+branch; renumber if these merge in the other order.)*
+
+**Upstream behavior.** No `--about` option exists. bash already dispatches on
+the basename of `$0` — `sh` sets `act_like_sh`, and the restricted-shell name
+sets `restricted_shell` — but nothing selects an identity string that way,
+because upstream only has one identity to select.
+
+**Rash behavior.** `--about` writes a single line naming the shell, its
+version, the platform it was built for, and a one-line description, then exits
+without executing. The name it reports comes from the invocation name: `bash`,
+`sh`, and the restricted-shell name all answer as **bash**; every other name,
+including one the caller invents, answers as **rash**.
+
+```
+$ bash --about
+bash 5.3.15(1)-release (x86_64-pc-linux-gnu) - GNU Bourne-Again SHell
+$ rash --about
+rash 5.3.15(1)-release (x86_64-pc-linux-gnu) - reversible, agent-safe GNU Bash fork
+```
+
+**Why.** This is the compatibility escape hatch that makes an eventual rename
+of the binary safe to perform at all, so it has to exist *before* any broad
+rename rather than after. A shell that is installed as `/bin/bash` must be
+indistinguishable from bash when something asks it what it is; a script that
+invokes `sh` is asking for compatibility and should not be told it is talking
+to a fork. The fork announces itself only when called by its own name.
+
+`--about` is also the smallest surface that makes the identity switch
+observable and therefore testable. It is a new option, so it cannot break any
+existing caller — unlike changing `--version` or `--help`, which scripts parse.
+Those stay untouched until the rename is deliberately made.
+
+**Implementation.** `shell_identity ()` in `shell.c` reuses the existing
+mechanism: `base_pathname` on `shell_name`, with a leading `-` stripped so a
+login shell arriving as `-bash` matches. It reads argv[0] rather than the
+executable's real path, so `exec -a` is honored exactly like a symlink — the
+name the caller used is the name that governs.
+
+**POSIX.** Not implicated. A new GNU-style long option; no POSIX-specified
+behavior changes, and no existing output changes.
+
+**Tests.** `tests/identity.tests`, `tests/identity.right`,
+`tests/run-identity` — checked as a classifier over the set of invocation
+names rather than the one case that motivated it: symlinks named `bash`,
+`rash`, `sh`, `rbash`, and an unknown name; `exec -a` for both identities;
+login-shell forms `-bash` and `-rash`; and an absolute path. It also asserts
+the line is exactly one line, carries the version and the platform, does not
+run a `-c` command, and that answering as bash leaves the fork's name nowhere
+in the output. `tests/invocation.right` was updated because the option
+legitimately appears in the usage list.
+
+**Upstream status.** Rash-specific. Not proposed upstream.
