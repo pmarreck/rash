@@ -1,0 +1,59 @@
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+# An unowned hook is a mutable advisory policy source. It must be refused by
+# default, and the caller must explicitly lower the trust boundary with
+# RASH_ALLOW_UNOWNED_HOOKS=1 to load it. Either outcome leaves the command's
+# execution unchanged: this first lifecycle slice is observation-only.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-hooks.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+cat > "$tmp/advisory.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.warn("test advisory lifecycle hook ran")
+  return run()
+end)
+EOF
+
+cat > "$tmp/observer.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.warn("test advisory hook returned without run")
+end)
+EOF
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+out=$(RASH_HOOK_DIR="$tmp" ${THIS_SH} -c 'printf executed' 2> "$tmp/rejected.err")
+status=$?
+err=$(cat "$tmp/rejected.err")
+echo "without opt-in: unowned hook rejected: $(contains "$err" "refusing unowned hook")"
+echo "without opt-in: command status: $status"
+echo "without opt-in: command stdout: $out"
+
+out=$(RASH_HOOK_DIR= RASH_ALLOW_UNOWNED_HOOKS= ${THIS_SH} -c 'export RASH_HOOK_DIR="$1"; export RASH_ALLOW_UNOWNED_HOOKS=1; printf executed' rash-hook-test "$tmp" 2> "$tmp/late-config.err")
+status=$?
+err=$(cat "$tmp/late-config.err")
+echo "late configuration: hook executed: $(contains "$err" "test advisory lifecycle hook ran")"
+echo "late configuration: command status: $status"
+echo "late configuration: command stdout: $out"
+
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} -c 'printf executed' 2> "$tmp/advisory.err")
+status=$?
+err=$(cat "$tmp/advisory.err")
+echo "with opt-in: unowned warning: $(contains "$err" "RASH_ALLOW_UNOWNED_HOOKS=1")"
+echo "with opt-in: unowned warning is strong: $(contains "$err" "WARNING: RASH_ALLOW_UNOWNED_HOOKS=1")"
+echo "with opt-in: hook executed: $(contains "$err" "test advisory lifecycle hook ran")"
+echo "with opt-in: no-run hook observed: $(contains "$err" "test advisory hook returned without run")"
+echo "with opt-in: command status: $status"
+echo "with opt-in: command stdout: $out"

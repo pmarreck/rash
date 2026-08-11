@@ -1,0 +1,2 @@
+${THIS_SH} ./sudo-tee-hook.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} sudo-tee-hook.right && rm -f ${BASH_TSTOUT}

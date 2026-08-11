@@ -1,0 +1,12 @@
+without opt-in: unowned hook rejected: yes
+without opt-in: command status: 0
+without opt-in: command stdout: executed
+late configuration: hook executed: yes
+late configuration: command status: 0
+late configuration: command stdout: executed
+with opt-in: unowned warning: yes
+with opt-in: unowned warning is strong: yes
+with opt-in: hook executed: yes
+with opt-in: no-run hook observed: yes
+with opt-in: command status: 0
+with opt-in: command stdout: executed

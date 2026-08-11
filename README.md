@@ -12,6 +12,29 @@ GCC baseline; `./build --zig` and `./test --zig` compile the same C sources
 with pinned Zig 0.16; `./bm` compares their release-mode execution times and
 records wall-clock, user-CPU, and system-CPU history.
 
+## Advisory lifecycle hooks
+
+Rash embeds LuaJIT for post-parse command lifecycle hooks. The first shipped
+hook, `warn_sudo_tee.lua`, recognizes the exact right-hand pipeline stage
+`sudo -S tee` with an input redirection. It warns that the redirect replaces
+the pipe and can expose a secret sent to standard input. It always executes
+the parsed command unchanged.
+
+Installed hooks live in `$prefix/share/rash/hooks`; enable them explicitly:
+
+	RASH_HOOK_DIR=/usr/local/share/rash/hooks rash -c '...'
+
+Each hook must be a regular file owned by root and not writable by group or
+world. To try a user-owned hook during development, set both variables:
+
+	RASH_HOOK_DIR="$PWD/hooks" RASH_ALLOW_UNOWNED_HOOKS=1 rash -c '...'
+
+Rash prints `WARNING: RASH_ALLOW_UNOWNED_HOOKS=1` for every such mutable hook.
+This opt-in loads lower-trust advisory code; it never bypasses another hook.
+All hooks in this first release are advisory: errors, a missing `run()`, or an
+instruction-limit failure still continue to the original command. Lua's
+general-purpose standard libraries are not exposed to hook files.
+
 GNU Bash is the GNU Project's Bourne
 Again SHell, a complete implementation of the POSIX shell spec,
 but also with interactive command line editing, job control on

@@ -1359,6 +1359,19 @@ AC_SUBST(LOCAL_CFLAGS)
 AC_SUBST(LOCAL_LDFLAGS)
 AC_SUBST(LOCAL_DEFS)
 
+AC_ARG_VAR([LUAJIT_CFLAGS], [C compiler flags for LuaJIT])
+AC_ARG_VAR([LUAJIT_LIBS], [linker flags for LuaJIT])
+if test -z "$LUAJIT_CFLAGS" || test -z "$LUAJIT_LIBS"; then
+  : ${PKG_CONFIG:=pkg-config}
+  if ! $PKG_CONFIG --exists luajit; then
+    AC_MSG_ERROR([LuaJIT development files are required])
+  fi
+  LUAJIT_CFLAGS=`$PKG_CONFIG --cflags luajit`
+  LUAJIT_LIBS=`$PKG_CONFIG --libs luajit`
+fi
+AC_SUBST([LUAJIT_CFLAGS])
+AC_SUBST([LUAJIT_LIBS])
+
 #AC_SUBST(ALLOCA_SOURCE)
 #AC_SUBST(ALLOCA_OBJECT)
 

@@ -13,12 +13,17 @@ annotate=[
 	build = Hermetic package wrapper with opt-in pinned Zig C-compiler build.
 	flake.lock = Immutable Nixpkgs input pin for reproducible builds and tests.
 	flake.nix = Pinned Nix package, GCC and Zig C-compiler checks, and hermetic benchmark tooling.
+	hooks.c = LuaJIT advisory lifecycle bridge over parsed COMMAND nodes.
+	hooks.h = Private executor interface for lifecycle hook dispatch.
+	hooks/warn_sudo_tee.lua = Advisory AST warning for sudo -S tee input redirects.
 	inbox/2026-07-21-rash-kickoff.md = Durable task brief for the dedicated Rash agent.
 	test = Hermetic full-suite wrapper with opt-in pinned Zig C-compiler validation.
 	tests/benchmark/arithmetic-loop.sh = External-I/O-free arithmetic evaluator benchmark workload.
 	tests/benchmark/function-dispatch.sh = External-I/O-free shell function dispatch benchmark workload.
 	tests/cli/bm = Deterministic CLI contract test for the benchmark runner.
+	tests/hooks.tests = Lifecycle loader ownership and advisory-fallthrough coverage.
 	tests/run-test-harness = Invokes the aggregate-runner regression harness under Bash
+	tests/sudo-tee-hook.tests = Classifier coverage for the shipped sudo/tee warning hook.
 	tests/trapchld2.sub = Self-spawning SIGCHLD probe (job control off, instant-exit children) for direct-dispatch and lost-update gates
 	tests/unit/run-all-harness = Creates an isolated fixture proving run-all propagates failures while continuing drivers
 ]

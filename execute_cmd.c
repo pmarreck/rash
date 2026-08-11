@@ -74,6 +74,7 @@ extern int errno;
 #include "hashlib.h"
 #include "jobs.h"
 #include "execute_cmd.h"
+#include "hooks.h"
 #include "findcmd.h"
 #include "redir.h"
 #include "trap.h"
@@ -638,6 +639,9 @@ execute_command_internal (COMMAND *command, int asynchronous, int pipe_in, int p
     return (last_command_exit_value);
   if (command == 0)
     return (EXECUTION_SUCCESS);
+
+  if (rash_hooks_active ())
+    return (rash_hooks_execute (command, asynchronous, pipe_in, pipe_out, fds_to_close));
 
   QUIT;
   run_pending_traps ();

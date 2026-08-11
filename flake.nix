@@ -33,10 +33,14 @@
 								pkg-config
 								texinfo
 							] ++ pkgs.lib.optionals useZigCompiler [ zigCc ];
-							buildInputs = with pkgs; [ ncurses ];
+							buildInputs = with pkgs; [ luajit ncurses ];
 
 							CFLAGS = if debug then "-O0 -g3" else null;
 							enableParallelBuilding = true;
+							doInstallCheck = true;
+							installCheckPhase = ''
+								test -f "$out/share/rash/hooks/warn_sudo_tee.lua"
+							'';
 							doCheck = withTests;
 							checkTarget = "tests";
 							enableParallelChecking = false;
@@ -93,10 +97,14 @@
 								pkgs.gnugrep
 								pkgs.gnused
 							];
-							buildInputs = with pkgs; [ ncurses ];
+							buildInputs = with pkgs; [ luajit ncurses ];
 
 							CFLAGS = if debug then "-O0 -g3" else null;
 							enableParallelBuilding = true;
+							doInstallCheck = true;
+							installCheckPhase = ''
+								test -f "$out/share/rash/hooks/warn_sudo_tee.lua"
+							'';
 							doCheck = withTests;
 							checkTarget = "tests";
 							enableParallelChecking = false;
@@ -160,6 +168,7 @@
 							jq
 							pkg-config
 							texinfo
+							luajit
 							zig
 						];
 						buildInputs = with pkgs; [ ncurses ];

@@ -5,15 +5,30 @@ described as one. It is a structural guard against *mistakes* — which is the
 dominant failure mode when an LLM drives a shell, and the reason this is worth
 building.
 
+## Implemented first slice
+
+The current implementation is advisory-only. `RASH_HOOK_DIR` selects Lua hook
+files; a regular root-owned file that is not group- or world-writable loads
+normally. A non-root-owned file requires `RASH_ALLOW_UNOWNED_HOOKS=1` and
+prints an uppercase warning that it is mutable advisory code. That variable
+chooses a lower-trust source and never suppresses a loaded hook.
+
+Hooks see unexpanded post-parse command fields through C-backed Lua userdata.
+They can inspect a connection's two sides, a simple command's words, and its
+input redirects. They cannot mutate the tree, deny a command, or invoke Lua's
+general-purpose standard libraries. A hook error, an instruction-limit error,
+or returning without `run()` falls through to later observers and then the
+original command.
+
 ## Shape
 
 One primitive, wrapping execution, in the style of Rack middleware:
 
 ```lua
 rash.hook(function(cmd, run)
-  -- before: inspect the tree, optionally rash.deny(reason)
-  local result = run(cmd)
-  -- after: exit status, duration -- where the undo log lives
+  -- before: inspect the tree
+  local result = run()
+  -- after: observe the exit status
   return result
 end)
 ```
@@ -47,15 +62,16 @@ Instead, remove the need for a marker (physics over policy):
 ## Marshalling: on demand only
 
 Deep-copying every `COMMAND *` into a Lua table on every command is real
-latency in an interactive shell. Nodes are exposed as LuaJIT FFI userdata with
-an `__index` metamethod that reads fields on access. A hook that inspects
+latency in an interactive shell. Nodes are exposed as C-backed Lua userdata
+with an `__index` metamethod that reads fields on access. A hook that inspects
 nothing costs nearly nothing, and a hook that reads one field pays for one
-field. This is the case LuaJIT's FFI is best at, and the main reason to prefer
-it over PUC Lua.
+field. LuaJIT supplies the small, fast embedded runtime without exposing raw
+FFI to hook files.
 
-## Mutation
+## Planned mutation support
 
-Permitted, but never silent -- and reported without ever diffing the tree.
+This is not implemented in the first slice. If added, mutation must never be
+silent and must be reported without ever diffing the tree.
 
 A whole-tree diff against a pristine copy would cost O(tree) on every command
 and require retaining that copy. It is also unnecessary. Mutation can only

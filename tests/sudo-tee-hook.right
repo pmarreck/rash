@@ -1,0 +1,7 @@
+dangerous shape warns: yes
+dangerous warning leaks pipeline input: no
+dangerous command status: 0
+dangerous command stdout: redirected-input
+pipeline without input redirection warns: no
+pipeline without sudo -S warns: no
+pipeline without sudo warns: no

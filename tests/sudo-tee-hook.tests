@@ -1,0 +1,52 @@
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+# An advisory hook must diagnose the precise parsed shape that makes
+# `sudo -S tee < file` ignore its pipeline input.  The fake sudo only removes
+# -S and execs tee, so the test exercises Bash's real pipeline/redirection
+# semantics without asking for credentials or privileges.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-sudo-tee.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+mkdir "$tmp/bin" || exit 1
+cat > "$tmp/bin/sudo" <<'EOF'
+#!/bin/sh
+[ "$1" = -S ] && shift
+exec "$@"
+EOF
+chmod +x "$tmp/bin/sudo"
+printf 'redirected-input\n' > "$tmp/input"
+cp ../hooks/warn_sudo_tee.lua "$tmp/warn_sudo_tee.lua"
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+out=$(PATH="$tmp/bin:$PATH" RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} -c 'printf pipeline-secret | sudo -S tee < "$1"' rash-hook-test "$tmp/input" 2> "$tmp/danger.err")
+status=$?
+err=$(cat "$tmp/danger.err")
+echo "dangerous shape warns: $(contains "$err" "sudo -S tee with an input redirection")"
+echo "dangerous warning leaks pipeline input: $(contains "$err" "pipeline-secret")"
+echo "dangerous command status: $status"
+echo "dangerous command stdout: $out"
+
+PATH="$tmp/bin:$PATH" RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} -c 'printf pipeline-secret | sudo -S tee' 2> "$tmp/no-redirection.err" > /dev/null
+err=$(cat "$tmp/no-redirection.err")
+echo "pipeline without input redirection warns: $(contains "$err" "sudo -S tee with an input redirection")"
+
+PATH="$tmp/bin:$PATH" RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} -c 'printf pipeline-secret | sudo tee < "$1"' rash-hook-test "$tmp/input" 2> "$tmp/no-stdin.err" > /dev/null
+err=$(cat "$tmp/no-stdin.err")
+echo "pipeline without sudo -S warns: $(contains "$err" "sudo -S tee with an input redirection")"
+
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} -c 'printf pipeline-secret | tee < "$1"' rash-hook-test "$tmp/input" 2> "$tmp/no-sudo.err" > /dev/null
+err=$(cat "$tmp/no-sudo.err")
+echo "pipeline without sudo warns: $(contains "$err" "sudo -S tee with an input redirection")"

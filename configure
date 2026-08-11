@@ -650,6 +650,8 @@ gl_use_winpthreads_default=
 enable_year2038=no
 ac_subst_vars='LTLIBOBJS
 STDCKDINT_H
+LUAJIT_LIBS
+LUAJIT_CFLAGS
 LOCAL_DEFS
 LOCAL_LDFLAGS
 LOCAL_CFLAGS
@@ -919,7 +921,9 @@ LIBS
 CPPFLAGS
 YACC
 YFLAGS
-CPP'
+CPP
+LUAJIT_CFLAGS
+LUAJIT_LIBS'
 
 
 # Initialize some variables set by options.
@@ -1674,6 +1678,9 @@ Some influential environment variables:
               This script will default YFLAGS to the empty string to avoid a
               default value of '-d' given by some make applications.
   CPP         C preprocessor
+  LUAJIT_CFLAGS
+              C compiler flags for LuaJIT
+  LUAJIT_LIBS linker flags for LuaJIT
 
 Use these variables to override the choices made by 'configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -23284,6 +23291,19 @@ fi
 
 
 
+
+
+if test -z "$LUAJIT_CFLAGS" || test -z "$LUAJIT_LIBS"; then
+  : ${PKG_CONFIG:=pkg-config}
+  if ! $PKG_CONFIG --exists luajit; then
+    as_fn_error $? "LuaJIT development files are required" "$LINENO" 5
+  fi
+  LUAJIT_CFLAGS=`$PKG_CONFIG --cflags luajit`
+  LUAJIT_LIBS=`$PKG_CONFIG --libs luajit`
+fi
+
+
+
 #AC_SUBST(ALLOCA_SOURCE)
 #AC_SUBST(ALLOCA_OBJECT)
 
@@ -24749,5 +24769,4 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized options: $ac_unrecognized_opts" >&5
 printf "%s\n" "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
-
 
