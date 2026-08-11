@@ -1,0 +1,15 @@
+symlink bash: bash
+symlink rash: rash
+symlink sh: bash
+symlink rbash: bash
+symlink unknownshell: rash
+exec -a rash: rash
+exec -a bash: bash
+login -bash: bash
+login -rash: rash
+absolute path: bash
+1
+carries version: yes
+carries platform: yes
+bash identity leaks the fork name: no
+ran the -c command: 0

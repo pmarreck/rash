@@ -4,6 +4,7 @@ bash: --badopt: invalid option
 bash [GNU long option] [option] ...
 bash [GNU long option] [option] script-file ...
 GNU long options:
+	--about
 	--debug
 	--debugger
 	--dump-po-strings
@@ -28,6 +29,7 @@ bash: --initfile: invalid option
 bash [GNU long option] [option] ...
 bash [GNU long option] [option] script-file ...
 GNU long options:
+	--about
 	--debug
 	--debugger
 	--dump-po-strings
@@ -52,6 +54,7 @@ bash: -q: invalid option
 bash [GNU long option] [option] ...
 bash [GNU long option] [option] script-file ...
 GNU long options:
+	--about
 	--debug
 	--debugger
 	--dump-po-strings
