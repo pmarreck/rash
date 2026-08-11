@@ -2,6 +2,7 @@
 ver=1.2
 annotate=[
 	.mechatron-prime/targets = Exact native Linux targets accepted by Mechatron Prime for each Rash master push.
+	BUGFIX_REPRO_REPORTS/2026-08-05-sigchld-lost-update-drain-window.md = Class-3 SIGCHLD report: handler-queued firings zeroed by drain read-then-clear; BLOCK_CHILD fix
 	CODE_REVIEW.md = 13-dimension evidence-backed code review and remediation order
 	MUTATION_SAFETY_OPTIONS.md = Evidence-backed Rash mutation-interception and COW rollback architecture options.
 	Makefile.in = Autotools Makefile template, including the README.md installation manifest.
@@ -18,5 +19,6 @@ annotate=[
 	tests/benchmark/function-dispatch.sh = External-I/O-free shell function dispatch benchmark workload.
 	tests/cli/bm = Deterministic CLI contract test for the benchmark runner.
 	tests/run-test-harness = Invokes the aggregate-runner regression harness under Bash
+	tests/trapchld2.sub = Self-spawning SIGCHLD probe (job control off, instant-exit children) for direct-dispatch and lost-update gates
 	tests/unit/run-all-harness = Creates an isolated fixture proving run-all propagates failures while continuing drivers
 ]

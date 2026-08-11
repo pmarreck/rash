@@ -26,3 +26,36 @@ for i in {1..30}; do
 	[ "$n" -eq 11 ] || losses=$((losses + 1))
 done
 echo "rounds with lost SIGCHLD trap firings: $losses"
+
+# The other dispatch path lost firings by a different mechanism. waitchld runs
+# the SIGCHLD trap directly when the wait builtin reaps a child, and that call
+# never marks SIGCHLD in progress, so a run_pending_traps entered from inside
+# that trap matched none of the three SIGCHLD branches and fell through to the
+# bad-handler branch, which warns and then discards the queued firings.
+#
+# What is asserted here is that branch never being taken, which is exactly what
+# the fix guarantees and is decisive: measured on this tree without the fix,
+# the probe below trips it in 14 of 2000 rounds, so a thousand rounds expect
+# seven. Run serially on purpose -- parallel load suppresses the window rather
+# than widening it.
+#
+# The firing count is asserted as well. It was held out while a third loss
+# class was open -- a handler-context reap queued between the drain's read of
+# pending_traps[SIGCHLD] and its clear, zeroed without ever being captured;
+# that made this probe flake at roughly one round in a thousand under load,
+# and a gate that flakes on an unfixed bug trains everyone to ignore it. The
+# drains now hold BLOCK_CHILD across the read-then-clear, so all three known
+# classes are closed and the count is decisive again: 766 of 2000 rounds on
+# stock 5.3.15, 14 of 2000 with only the first fix, 0 with all three.
+warned=0
+losses=0
+for i in {1..1000}; do
+	out=$(${THIS_SH} ./trapchld2.sub 2>&1)
+	case $out in
+	*"bad value in trap_list"*) warned=$((warned + 1)) ;;
+	esac
+	n=$(echo "$out" | grep -c CHLD)
+	[ "$n" -eq 10 ] || losses=$((losses + 1))
+done
+echo "self-spawn rounds discarding a queued firing: $warned"
+echo "self-spawn rounds with lost SIGCHLD trap firings: $losses"

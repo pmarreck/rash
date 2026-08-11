@@ -1,1 +1,3 @@
 rounds with lost SIGCHLD trap firings: 0
+self-spawn rounds discarding a queued firing: 0
+self-spawn rounds with lost SIGCHLD trap firings: 0

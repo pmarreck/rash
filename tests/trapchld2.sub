@@ -1,0 +1,17 @@
+# A finite self-spawning SIGCHLD trap, with job control left off.
+#
+# Two properties make this the sensitive probe for the direct dispatch path.
+# Job control off is what steers waitchld to run the trap directly for the wait
+# builtin, which is the call that never marks SIGCHLD in progress. And the
+# children exit instantly rather than sleeping, so a reap lands inside the trap
+# window often enough to matter -- a sleep-based workload puts the reaps
+# outside it and almost never trips this.
+#
+# The trap starts another child on each of its first four firings, so the
+# reaping continues while the trap is already running. Exactly ten firings are
+# owed: six initial children plus four spawned by the trap.
+n=0
+trap 'printf "CHLD\n"; n=$((n+1)); if [ "$n" -le 4 ]; then (exit 0) & fi' CHLD
+i=0
+while [ "$i" -lt 6 ]; do (exit 0) & i=$((i+1)); done
+wait

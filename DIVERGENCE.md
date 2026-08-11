@@ -161,4 +161,127 @@ children reaped during the trap. Nine lines, four of them comment.
 measured pre-fix rate. `tests/trap8.sub` also stops failing intermittently.
 
 **Upstream status.** Ready to send, with the patch:
-`BUGFIX_REPRO_REPORTS/2026-07-31-sigchld-lost-trap-firings.md`.
+`BUGFIX_REPRO_REPORTS/2026-07-31-sigchld-lost-trap-firings.md`. Send it
+together with entry 4, which fixes the second half of the same contract.
+
+---
+
+## 4. SIGCHLD trap firings are not discarded on the direct dispatch path
+
+**Upstream behavior.** `waitchld` runs the SIGCHLD trap two different ways: it
+queues firings for `run_pending_traps`, or, when the `wait` builtin reaps the
+child, it calls `run_sigchld_trap` **directly**. The direct call sets
+`running_trap` and installs the `IMPOSSIBLE_TRAP_HANDLER` sentinel but never
+sets `SIG_INPROGRESS`, and its dispatch chain never checks whether firings are
+already queued. So a trap dispatched directly while `pending_traps[SIGCHLD]` is
+non-zero re-enters `run_pending_traps` from its own trap body, matches none of
+the three SIGCHLD branches, and falls through to the generic bad-handler
+branch — which prints `run_pending_traps: bad value in trap_list[17]` and then
+discards the queued firings. Upstream left a TODO for exactly this at
+`trap.c:354`: *"could check for running the trap handler for the same signal
+here."*
+
+**Rash behavior.** Firings queued while a SIGCHLD trap is executing are kept
+and then run, on both dispatch paths.
+
+**Why.** Same contract as entry 3 — one trap per reaped child — broken by the
+other dispatch path. Entry 3's fix drains the queued path; nothing drained this
+one. The failure is also silent in its consequence and noisy in the wrong
+place: the user loses a trap firing and gets an internal warning about a bad
+pointer value, which reads like memory corruption rather than a lost signal.
+
+**Implementation.** Two changes, because stopping the discard is not the same
+as running what was kept.
+
+1. The branch that recognizes "a SIGCHLD trap is already running" tested
+   `SIG_INPROGRESS` as well as the sentinel. That was too narrow: the sentinel
+   is installed only for the duration of `run_sigchld_trap` and restored when
+   it unwinds, so it alone means a SIGCHLD trap is executing. Dropping the
+   extra condition makes the recursive call defer the firings instead of
+   discarding them.
+2. Deferring alone converted a loud loss into a silent one — measured, not
+   assumed: instrumentation showed `pending_at_exit=1` with the trap having run
+   ten times instead of eleven. Branch 1 has a drain loop for the queued path;
+   the direct path had none, so `run_deferred_sigchld_traps` drains it at that
+   call site after the trap returns.
+
+**POSIX.** Not implicated; this makes bash match its own documented behavior.
+
+**Tests.** `tests/trapchld2.sub` plus the second section of
+`tests/trapchld.tests` — a finite self-spawning trap with job control off and
+instant-exit children. What is asserted is that the discarding branch is never
+taken, which is what this fix guarantees and is decisive: over 2000 serial
+rounds it fires 14 times without the fix and 0 times with it. The test runs
+1000 rounds, expects about seven hits on a regression, and costs ~19 seconds.
+
+Two properties of the workload were established by measurement and are easy to
+get wrong. Sleeping children put the reaps outside the trap window — the same
+shape with `sleep 0.3` ran 8600 rounds clean against a build this probe fails
+on at 0.7%. And it must run serially: eight-way parallel load suppressed the
+window completely (0 in 800 rounds) rather than widening it.
+
+The firing **count** is deliberately not asserted over this probe. A third,
+undiagnosed loss survives both fixes at roughly one round in a thousand under
+load, with a signature distinct from either fixed mechanism: `waitchld` counts
+a reap that is then neither queued nor run directly, with no warning and
+nothing left pending at exit. Asserting the count here would make the suite
+intermittently red for an open bug, which this project has already decided is
+worse than the bug. It is recorded in `PLAN.md` with its counter evidence.
+
+**Upstream status.** Not yet sent. Belongs in the same message as entry 3.
+Found by an independent verifier (a Codex session) rejecting entry 3's fix as
+incomplete; reproduced and diagnosed here from its lead.
+
+---
+
+## 5. SIGCHLD firings queued by the handler survive the drain's read-then-clear
+
+**Upstream behavior.** `pending_traps[SIGCHLD]` is a counter incremented from
+two contexts: `sigchld_handler` calls `waitchld` directly, and main-context
+paths do too. The drain in `run_pending_traps` consumes it with a plain
+read-then-clear (`x = pending_traps[sig]; pending_traps[sig] = 0;`). A
+SIGCHLD delivered between those two statements increments the counter, and
+the clear then zeroes an increment never captured in `x`. The firing is
+neither run nor left pending, and nothing diagnostic is printed. Every other
+signal uses `pending_traps` as a flag, where this pattern is harmless;
+SIGCHLD is the only counting signal, and a count is what read-then-clear
+cannot handle.
+
+**Rash behavior.** The read and clear are atomic with respect to the handler:
+both drain sites (`run_pending_traps` and `run_deferred_sigchld_traps`) hold
+`BLOCK_CHILD` across the two-line window, releasing it before the trap body
+runs so delivery semantics during trap execution are unchanged.
+
+**Why.** Same contract as entries 3 and 4, broken a third way. This one is the
+quietest of the three: no warning, nothing pending at exit, and a rate that
+only becomes measurable under CPU load — which made it the one that kept the
+Zig-compiled test suite intermittently red after the other two were fixed.
+
+**Evidence.** Diagnosed by detector, not inference. The shell is
+single-threaded, so a nested `queue_sigchld_trap` while main context is inside
+a flagged window can only be the signal handler. Across 8000 loaded rounds of
+the self-spawning probe: 15 losses, 14 carrying a drain-window hit, and the
+write-side window hit zero times (main-context queueing is already covered by
+`queue_sigchld` deferral and the `wait_for` `BLOCK_CHILD` sections). With the
+window sealed, the same campaign produced zero losses and zero hits —
+fifteen-to-zero against its own detector. The write side was left untouched
+on that evidence.
+
+This window was suspected on day one and wrongly "ruled out" when guarding it
+moved 9-of-30 to 7-of-30 — a null result measured while entry 3's mechanism,
+twenty times more frequent, dominated. The independent verifier that reported
+the same guard working was discounted for the same reason. It was right.
+
+**POSIX.** Not implicated; blocking a signal across two statements changes no
+observable semantics except the absence of the loss.
+
+**Tests.** The count assertion in `tests/trapchld.tests` over
+`tests/trapchld2.sub`, restored once this landed — it was deliberately held
+out while this class was open, because a gate that flakes on an unfixed bug
+trains everyone to ignore it. With all three classes closed it is decisive
+again: 766-of-2000 (stock), 14-of-2000 (entry 3's fix only), 0 thereafter.
+
+**Upstream status.** Belongs in the same message as entries 3 and 4;
+`BUGFIX_REPRO_REPORTS/2026-08-05-sigchld-lost-update-drain-window.md` is the
+send-ready writeup, and `BUGFIX_REPRO_REPORTS/sigchld-fixes.patch` carries all
+three fixes as one reviewable diff.

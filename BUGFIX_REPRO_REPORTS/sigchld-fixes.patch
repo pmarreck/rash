@@ -1,0 +1,231 @@
+diff --git a/jobs.c b/jobs.c
+index 0f32ebbf..aa7ddffe 100644
+--- a/jobs.c
++++ b/jobs.c
+@@ -4265,6 +4265,7 @@ itrace("waitchld: waitpid returns %d block = %d children_exited = %d", pid, bloc
+ 	  o = jobs_list_frozen;
+ 	  jobs_list_frozen = 1;
+ 	  run_sigchld_trap (children_exited);	/* XXX */
++	  run_deferred_sigchld_traps ();
+ 	  jobs_list_frozen = o;
+ 	}
+       else
+diff --git a/trap.c b/trap.c
+index 5cf8a1bd..10233877 100644
+--- a/trap.c
++++ b/trap.c
+@@ -406,9 +406,28 @@ run_pending_traps (void)
+ 	      /* We modify evalnest here even though run_sigchld_trap can run
+ 		 the trap action more than once */
+ 	      evalnest++;
+-	      x = pending_traps[sig];
+-	      pending_traps[sig] = 0;
+-	      run_sigchld_trap (x);	/* use as counter */
++	      /* Drain here rather than once: a child reaped while the trap was
++	         running queues another firing, and the `continue' below advances
++	         to the next signal, so nothing would revisit SIGCHLD in this
++	         pass. Bounded -- children are finite.
++
++	         SIGCHLD is blocked across the read and the clear because the
++	         handler increments this counter too: a reap landing between
++	         them would have its increment zeroed without ever being seen
++	         here. It is unblocked before the trap body runs, so delivery
++	         during trap execution is unchanged. */
++	      for (;;)
++		{
++		  sigset_t chld_set, chld_oset;
++
++		  BLOCK_CHILD (chld_set, chld_oset);
++		  x = pending_traps[sig];
++		  pending_traps[sig] = 0;
++		  UNBLOCK_CHILD (chld_oset);
++		  if (x <= 0)
++		    break;
++		  run_sigchld_trap (x);	/* use as counter */
++		}
+ 	      running_trap = 0;
+ 	      evalnest--;
+ 	      sigmodes[SIGCHLD] &= ~SIG_INPROGRESS;
+@@ -418,11 +437,16 @@ run_pending_traps (void)
+ 	      continue;
+ 	    }
+ 	  else if (sig == SIGCHLD &&
+-		   trap_list[SIGCHLD] == (char *)IMPOSSIBLE_TRAP_HANDLER &&
+-		   (sigmodes[SIGCHLD] & SIG_INPROGRESS) != 0)
++		   trap_list[SIGCHLD] == (char *)IMPOSSIBLE_TRAP_HANDLER)
+ 	    {
+ 	      /* This can happen when run_pending_traps is called while
+-		 running a SIGCHLD trap handler. */
++		 running a SIGCHLD trap handler.  The sentinel is installed
++		 only for the duration of run_sigchld_trap and restored when
++		 it unwinds, so it alone means a SIGCHLD trap is executing.
++		 Testing SIG_INPROGRESS as well was too narrow: waitchld
++		 calls run_sigchld_trap directly without setting it, and the
++		 queued firings then fell through to the bad-handler branch
++		 below, which warns and discards them. */
+ 	      running_trap = 0;
+ 	      /* want to leave pending_traps[SIGCHLD] alone here */
+ 	      continue;					/* XXX */
+@@ -717,6 +741,30 @@ set_impossible_sigchld_trap (void)
+   sigmodes[SIGCHLD] &= ~SIG_TRAPPED;	/* uw_maybe_set_sigchld_trap checks this */
+ }
+ 
++/* Run SIGCHLD trap firings that were queued while a SIGCHLD trap was already
++   executing.  run_pending_traps deliberately leaves pending_traps[SIGCHLD]
++   alone when it is entered recursively from a running SIGCHLD trap, so the
++   dispatch site drains them here once that trap has finished; otherwise
++   nothing revisits them and they are never run. */
++void
++run_deferred_sigchld_traps (void)
++{
++  int x;
++
++  for (;;)
++    {
++      sigset_t chld_set, chld_oset;
++
++      BLOCK_CHILD (chld_set, chld_oset);
++      x = pending_traps[SIGCHLD];
++      pending_traps[SIGCHLD] = 0;
++      UNBLOCK_CHILD (chld_oset);
++      if (x <= 0)
++	break;
++      run_sigchld_trap (x);		/* use as counter */
++    }
++}
++
+ /* Act as if we received SIGCHLD NCHILD times and increment
+    pending_traps[SIGCHLD] by that amount.  This allows us to still run the
+    SIGCHLD trap once for each exited child. */
+diff --git a/trap.h b/trap.h
+index 82a3c651..03b5867c 100644
+--- a/trap.h
++++ b/trap.h
+@@ -73,6 +73,7 @@ extern void initialize_traps (void);
+ extern void run_pending_traps (void);
+ 
+ extern void queue_sigchld_trap (int);
++extern void run_deferred_sigchld_traps (void);
+ extern void set_impossible_sigchld_trap (void);
+ extern void set_sigchld_trap (const char *);
+ 
+diff --git a/tests/run-trapchld b/tests/run-trapchld
+new file mode 100644
+index 00000000..05a13726
+--- /dev/null
++++ b/tests/run-trapchld
+@@ -0,0 +1,2 @@
++${THIS_SH} ./trapchld.tests > ${BASH_TSTOUT} 2>&1
++diff ${BASH_TSTOUT} trapchld.right && rm -f ${BASH_TSTOUT}
+diff --git a/tests/trapchld.right b/tests/trapchld.right
+new file mode 100644
+index 00000000..ee8f0fcf
+--- /dev/null
++++ b/tests/trapchld.right
+@@ -0,0 +1,3 @@
++rounds with lost SIGCHLD trap firings: 0
++self-spawn rounds discarding a queued firing: 0
++self-spawn rounds with lost SIGCHLD trap firings: 0
+diff --git a/tests/trapchld.sub b/tests/trapchld.sub
+new file mode 100644
+index 00000000..df23b651
+--- /dev/null
++++ b/tests/trapchld.sub
+@@ -0,0 +1,7 @@
++# Background children exit while a foreground command holds the shell in
++# wait_for, so their traps are queued rather than run by the wait builtin.
++set -m
++trap 'echo CHLD' SIGCHLD
++for i in {1..10}; do sleep 0.3 & done
++sleep 0.3
++wait
+diff --git a/tests/trapchld.tests b/tests/trapchld.tests
+new file mode 100644
+index 00000000..bacd0264
+--- /dev/null
++++ b/tests/trapchld.tests
+@@ -0,0 +1,61 @@
++#   This program is free software: you can redistribute it and/or modify
++#   it under the terms of the GNU General Public License as published by
++#   the Free Software Foundation, either version 3 of the License, or
++#   (at your option) any later version.
++#
++#   This program is distributed in the hope that it will be useful,
++#   but WITHOUT ANY WARRANTY; without even the implied warranty of
++#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++#   GNU General Public License for more details.
++#
++#   You should have received a copy of the GNU General Public License
++#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++#
++# The SIGCHLD trap runs once per reaped child. run_pending_traps used to run
++# the queued firings once and then continue to the next signal, so a child
++# reaped while the trap was executing queued a firing that nothing in that
++# pass came back for -- and at end of input nothing ever parsed again to
++# collect it. Statistical control, not proof: the loss was intermittent
++# (about one round in five here), so thirty clean rounds carry it past a
++# hundred to one. Only the losing-round count is printed, so timing never
++# reaches the expected output.
++
++losses=0
++for i in {1..30}; do
++	n=$(${THIS_SH} ./trapchld.sub 2>&1 | grep -c CHLD)
++	[ "$n" -eq 11 ] || losses=$((losses + 1))
++done
++echo "rounds with lost SIGCHLD trap firings: $losses"
++
++# The other dispatch path lost firings by a different mechanism. waitchld runs
++# the SIGCHLD trap directly when the wait builtin reaps a child, and that call
++# never marks SIGCHLD in progress, so a run_pending_traps entered from inside
++# that trap matched none of the three SIGCHLD branches and fell through to the
++# bad-handler branch, which warns and then discards the queued firings.
++#
++# What is asserted here is that branch never being taken, which is exactly what
++# the fix guarantees and is decisive: measured on this tree without the fix,
++# the probe below trips it in 14 of 2000 rounds, so a thousand rounds expect
++# seven. Run serially on purpose -- parallel load suppresses the window rather
++# than widening it.
++#
++# The firing count is asserted as well. It was held out while a third loss
++# class was open -- a handler-context reap queued between the drain's read of
++# pending_traps[SIGCHLD] and its clear, zeroed without ever being captured;
++# that made this probe flake at roughly one round in a thousand under load,
++# and a gate that flakes on an unfixed bug trains everyone to ignore it. The
++# drains now hold BLOCK_CHILD across the read-then-clear, so all three known
++# classes are closed and the count is decisive again: 766 of 2000 rounds on
++# stock 5.3.15, 14 of 2000 with only the first fix, 0 with all three.
++warned=0
++losses=0
++for i in {1..1000}; do
++	out=$(${THIS_SH} ./trapchld2.sub 2>&1)
++	case $out in
++	*"bad value in trap_list"*) warned=$((warned + 1)) ;;
++	esac
++	n=$(echo "$out" | grep -c CHLD)
++	[ "$n" -eq 10 ] || losses=$((losses + 1))
++done
++echo "self-spawn rounds discarding a queued firing: $warned"
++echo "self-spawn rounds with lost SIGCHLD trap firings: $losses"
+diff --git a/tests/trapchld2.sub b/tests/trapchld2.sub
+new file mode 100644
+index 00000000..358e43f6
+--- /dev/null
++++ b/tests/trapchld2.sub
+@@ -0,0 +1,17 @@
++# A finite self-spawning SIGCHLD trap, with job control left off.
++#
++# Two properties make this the sensitive probe for the direct dispatch path.
++# Job control off is what steers waitchld to run the trap directly for the wait
++# builtin, which is the call that never marks SIGCHLD in progress. And the
++# children exit instantly rather than sleeping, so a reap lands inside the trap
++# window often enough to matter -- a sleep-based workload puts the reaps
++# outside it and almost never trips this.
++#
++# The trap starts another child on each of its first four firings, so the
++# reaping continues while the trap is already running. Exactly ten firings are
++# owed: six initial children plus four spawned by the trap.
++n=0
++trap 'printf "CHLD\n"; n=$((n+1)); if [ "$n" -le 4 ]; then (exit 0) & fi' CHLD
++i=0
++while [ "$i" -lt 6 ]; do (exit 0) & i=$((i+1)); done
++wait
