@@ -147,6 +147,7 @@ DEFSRC =  $(srcdir)/alias.def $(srcdir)/bind.def $(srcdir)/break.def \
 	  $(srcdir)/fg_bg.def $(srcdir)/hash.def $(srcdir)/help.def \
 	  $(srcdir)/history.def $(srcdir)/jobs.def $(srcdir)/kill.def \
 	  $(srcdir)/let.def $(srcdir)/read.def $(srcdir)/return.def \
+	  $(srcdir)/reloadhooks.def \
 	  $(srcdir)/set.def $(srcdir)/setattr.def $(srcdir)/shift.def \
 	  $(srcdir)/source.def $(srcdir)/suspend.def $(srcdir)/test.def \
 	  $(srcdir)/times.def $(srcdir)/trap.def $(srcdir)/type.def \
@@ -163,6 +164,7 @@ OFILES = builtins.o \
 	evalstring.o exec.o exit.o fc.o fg_bg.o hash.o help.o history.o \
 	jobs.o kill.o let.o mapfile.o \
 	pushd.o read.o return.o set.o setattr.o shift.o source.o \
+	reloadhooks.o \
 	suspend.o test.o times.o trap.o type.o ulimit.o umask.o \
 	wait.o getopts.o shopt.o printf.o getopt.o bashgetopt.o complete.o
 
@@ -317,6 +319,7 @@ printf.o: printf.def
 pushd.o: pushd.def
 read.o: read.def
 return.o: return.def
+reloadhooks.o: reloadhooks.def
 set.o: set.def
 setattr.o: setattr.def
 shift.o: shift.def

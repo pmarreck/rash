@@ -1,0 +1,55 @@
+This file is reloadhooks.def, from which is created reloadhooks.c.
+It implements the optional Rash hook-reload builtin.
+
+Copyright (C) 2026 Peter Marreck.
+
+This file is part of Rash.
+
+Rash is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Rash is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Rash.  If not, see <http://www.gnu.org/licenses/>.
+
+$PRODUCES reloadhooks.c
+
+$BUILTIN reloadhooks
+$FUNCTION reloadhooks_builtin
+$SHORT_DOC reloadhooks
+Reload the configured Rash lifecycle hooks.
+
+The builtin is available only when Rash starts with
+RASH_HOOK_RELOAD_BUILTIN=1. It rechecks hook admission and replaces the
+active hook set only when every configured hook loads successfully.
+
+Exit Status:
+Returns success if the configured hook set was reloaded.
+$END
+
+#include <config.h>
+
+#if defined (HAVE_UNISTD_H)
+#  ifdef _MINIX
+#    include <sys/types.h>
+#  endif
+#  include <unistd.h>
+#endif
+
+#include "../shell.h"
+#include "../hooks.h"
+#include "common.h"
+
+int
+reloadhooks_builtin (WORD_LIST *list)
+{
+  if (no_options (list))
+    return (EX_USAGE);
+  return (rash_hooks_reload ());
+}

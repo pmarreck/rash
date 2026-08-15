@@ -35,6 +35,21 @@ All hooks in this first release are advisory: errors, a missing `run()`, or an
 instruction-limit failure still continue to the original command. Lua's
 general-purpose standard libraries are not exposed to hook files.
 
+For hook development, `RASH_HOOK_RELOAD=mtime` checks the cached hook-file
+manifest before each outermost parsed command and reloads only when a hook was
+touched. It detects added, removed, renamed, or edited `.lua` files and
+admission-relevant metadata changes. An invalid replacement reports its load
+error and leaves the prior working hook set active.
+
+	RASH_HOOK_DIR="$PWD/hooks" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_RELOAD=mtime rash
+
+For an imperative reload with no per-command metadata checks, start Rash with
+`RASH_HOOK_RELOAD_BUILTIN=1` and run `reloadhooks`. The builtin is absent when
+that startup flag is not set.
+
+	RASH_HOOK_DIR="$PWD/hooks" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_RELOAD_BUILTIN=1 rash
+	$ reloadhooks
+
 GNU Bash is the GNU Project's Bourne
 Again SHell, a complete implementation of the POSIX shell spec,
 but also with interactive command line editing, job control on

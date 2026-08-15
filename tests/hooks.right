@@ -10,3 +10,26 @@ with opt-in: hook executed: yes
 with opt-in: no-run hook observed: yes
 with opt-in: command status: 0
 with opt-in: command stdout: executed
+mtime reload: initial hook observed: yes
+mtime reload: edited hook observed: yes
+mtime reload: command status: 0
+mtime reload: command stdout: firstsecond
+without mtime reload: edited hook observed: no
+without mtime reload: command status: 0
+without mtime reload: command stdout: firstsecond
+normal configuration: initial hook observed: yes
+normal configuration: later directory ignored: no
+normal configuration: command status: 0
+normal configuration: command stdout: beforeafter
+mtime reload: invalid replacement warned: yes
+mtime reload: invalid replacement retained prior hook: yes
+mtime reload: repaired hook observed: yes
+mtime reload: invalid replacement command status: 0
+mtime reload: invalid replacement command stdout: firstafter-invalidafter-repair
+reloadhooks builtin: hidden without flag: no
+reloadhooks builtin: hidden status: 1
+reloadhooks builtin: enabled by flag: builtin
+reloadhooks builtin: enabled status: 0
+reloadhooks builtin: edited hook observed: yes
+reloadhooks builtin: command status: 0
+reloadhooks builtin: command stdout: firstsecond

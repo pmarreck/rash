@@ -552,6 +552,7 @@ BUILTIN_DEFS = $(DEFSRC)/alias.def $(DEFSRC)/bind.def $(DEFSRC)/break.def \
 	       $(DEFSRC)/fg_bg.def $(DEFSRC)/hash.def $(DEFSRC)/help.def \
 	       $(DEFSRC)/history.def $(DEFSRC)/jobs.def $(DEFSRC)/kill.def \
 	       $(DEFSRC)/let.def $(DEFSRC)/read.def $(DEFSRC)/return.def \
+	       $(DEFSRC)/reloadhooks.def \
 	       $(DEFSRC)/set.def $(DEFSRC)/setattr.def $(DEFSRC)/shift.def \
 	       $(DEFSRC)/source.def $(DEFSRC)/suspend.def $(DEFSRC)/test.def \
 	       $(DEFSRC)/times.def $(DEFSRC)/trap.def $(DEFSRC)/type.def \
@@ -572,7 +573,7 @@ BUILTIN_OBJS = $(DEFDIR)/alias.o $(DEFDIR)/bind.o $(DEFDIR)/break.o \
 	       $(DEFDIR)/fg_bg.o $(DEFDIR)/hash.o $(DEFDIR)/help.o \
 	       $(DEFDIR)/history.o $(DEFDIR)/jobs.o $(DEFDIR)/kill.o \
 	       $(DEFDIR)/let.o $(DEFDIR)/pushd.o $(DEFDIR)/read.o \
-	       $(DEFDIR)/return.o $(DEFDIR)/shopt.o $(DEFDIR)/printf.o \
+	       $(DEFDIR)/return.o $(DEFDIR)/reloadhooks.o $(DEFDIR)/shopt.o $(DEFDIR)/printf.o \
 	       $(DEFDIR)/set.o $(DEFDIR)/setattr.o $(DEFDIR)/shift.o \
 	       $(DEFDIR)/source.o $(DEFDIR)/suspend.o $(DEFDIR)/test.o \
 	       $(DEFDIR)/times.o $(DEFDIR)/trap.o $(DEFDIR)/type.o \
@@ -1925,6 +1926,7 @@ $(DEFDIR)/pushd.o: $(DEFSRC)/pushd.def
 $(DEFDIR)/read.o: $(DEFSRC)/read.def
 $(DEFDIR)/reserved.o: $(DEFSRC)/reserved.def
 $(DEFDIR)/return.o: $(DEFSRC)/return.def
+$(DEFDIR)/reloadhooks.o: $(DEFSRC)/reloadhooks.def
 $(DEFDIR)/set.o: $(DEFSRC)/set.def
 $(DEFDIR)/setattr.o: $(DEFSRC)/setattr.def
 $(DEFDIR)/shift.o: $(DEFSRC)/shift.def

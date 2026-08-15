@@ -68,6 +68,7 @@ extern int get_tty_state (void);
 
 #include "input.h"
 #include "execute_cmd.h"
+#include "hooks.h"
 #include "findcmd.h"
 
 #if defined (USING_BASH_MALLOC) && defined (DEBUG) && !defined (DISABLE_MALLOC_WRAPPERS)
@@ -1981,6 +1982,7 @@ shell_initialize (void)
   /* Sort the array of shell builtins so that the binary search in
      find_shell_builtin () works correctly. */
   initialize_shell_builtins ();
+  rash_hooks_configure_builtin ();
 
   /* Initialize the trap signal handlers before installing our own
      signal handlers.  traps.c:restore_original_signals () is responsible

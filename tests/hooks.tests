@@ -57,3 +57,123 @@ echo "with opt-in: hook executed: $(contains "$err" "test advisory lifecycle hoo
 echo "with opt-in: no-run hook observed: $(contains "$err" "test advisory hook returned without run")"
 echo "with opt-in: command status: $status"
 echo "with opt-in: command stdout: $out"
+
+reload_dir="$tmp/reload-hooks"
+mkdir "$reload_dir"
+cat > "$reload_dir/advisory.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.warn("reload hook version one")
+  return run()
+end)
+EOF
+touch -d '2001-01-01 00:00:00 UTC' "$reload_dir/advisory.lua"
+
+cat > "$tmp/reload-mtime.sh" <<'EOF'
+printf first
+printf '%s\n' 'rash.hook(function(cmd, run)' '  rash.warn("reload hook version two")' '  return run()' 'end)' > "$RASH_HOOK_DIR/advisory.lua"
+touch -d '2001-01-01 00:00:01 UTC' "$RASH_HOOK_DIR/advisory.lua"
+printf second
+EOF
+
+out=$(RASH_HOOK_DIR="$reload_dir" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_RELOAD=mtime ${THIS_SH} "$tmp/reload-mtime.sh" 2> "$tmp/reload-mtime.err")
+status=$?
+err=$(cat "$tmp/reload-mtime.err")
+echo "mtime reload: initial hook observed: $(contains "$err" "reload hook version one")"
+echo "mtime reload: edited hook observed: $(contains "$err" "reload hook version two")"
+echo "mtime reload: command status: $status"
+echo "mtime reload: command stdout: $out"
+
+cat > "$reload_dir/advisory.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.warn("reload hook version one")
+  return run()
+end)
+EOF
+touch -d '2001-01-01 00:00:00 UTC' "$reload_dir/advisory.lua"
+
+out=$(RASH_HOOK_DIR="$reload_dir" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} "$tmp/reload-mtime.sh" 2> "$tmp/no-reload.err")
+status=$?
+err=$(cat "$tmp/no-reload.err")
+echo "without mtime reload: edited hook observed: $(contains "$err" "reload hook version two")"
+echo "without mtime reload: command status: $status"
+echo "without mtime reload: command stdout: $out"
+
+normal_first_dir="$tmp/normal-first-hooks"
+normal_second_dir="$tmp/normal-second-hooks"
+mkdir "$normal_first_dir" "$normal_second_dir"
+printf '%s\n' 'rash.hook(function(cmd, run)' '  rash.warn("normal configuration version one")' '  return run()' 'end)' > "$normal_first_dir/advisory.lua"
+printf '%s\n' 'rash.hook(function(cmd, run)' '  rash.warn("normal configuration version two")' '  return run()' 'end)' > "$normal_second_dir/advisory.lua"
+
+cat > "$tmp/normal-configuration-once.sh" <<'EOF'
+printf before
+export RASH_HOOK_DIR="$1"
+printf after
+EOF
+
+out=$(RASH_HOOK_DIR="$normal_first_dir" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} "$tmp/normal-configuration-once.sh" "$normal_second_dir" 2> "$tmp/normal-configuration-once.err")
+status=$?
+err=$(cat "$tmp/normal-configuration-once.err")
+echo "normal configuration: initial hook observed: $(contains "$err" "normal configuration version one")"
+echo "normal configuration: later directory ignored: $(contains "$err" "normal configuration version two")"
+echo "normal configuration: command status: $status"
+echo "normal configuration: command stdout: $out"
+
+cat > "$reload_dir/advisory.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.warn("reload hook version one")
+  return run()
+end)
+EOF
+touch -d '2001-01-01 00:00:00 UTC' "$reload_dir/advisory.lua"
+
+cat > "$tmp/reload-invalid.sh" <<'EOF'
+printf first
+printf '%s\n' 'rash.hook(function(cmd, run)' > "$RASH_HOOK_DIR/advisory.lua"
+touch -d '2001-01-01 00:00:01 UTC' "$RASH_HOOK_DIR/advisory.lua"
+printf after-invalid
+printf '%s\n' 'rash.hook(function(cmd, run)' '  rash.warn("reload hook version two")' '  return run()' 'end)' > "$RASH_HOOK_DIR/advisory.lua"
+touch -d '2001-01-01 00:00:02 UTC' "$RASH_HOOK_DIR/advisory.lua"
+printf after-repair
+EOF
+
+out=$(RASH_HOOK_DIR="$reload_dir" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_RELOAD=mtime ${THIS_SH} "$tmp/reload-invalid.sh" 2> "$tmp/reload-invalid.err")
+status=$?
+err=$(cat "$tmp/reload-invalid.err")
+echo "mtime reload: invalid replacement warned: $(contains "$err" "cannot load hook")"
+echo "mtime reload: invalid replacement retained prior hook: $(contains "$err" "reload hook version one")"
+echo "mtime reload: repaired hook observed: $(contains "$err" "reload hook version two")"
+echo "mtime reload: invalid replacement command status: $status"
+echo "mtime reload: invalid replacement command stdout: $out"
+
+out=$(${THIS_SH} -c 'type -t reloadhooks' 2> "$tmp/reload-builtin-hidden.err")
+status=$?
+echo "reloadhooks builtin: hidden without flag: $(contains "$out" "builtin")"
+echo "reloadhooks builtin: hidden status: $status"
+
+out=$(RASH_HOOK_RELOAD_BUILTIN=1 ${THIS_SH} -c 'type -t reloadhooks' 2> "$tmp/reload-builtin-type.err")
+status=$?
+echo "reloadhooks builtin: enabled by flag: $out"
+echo "reloadhooks builtin: enabled status: $status"
+
+cat > "$reload_dir/advisory.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.warn("reload hook version one")
+  return run()
+end)
+EOF
+touch -d '2001-01-01 00:00:00 UTC' "$reload_dir/advisory.lua"
+
+cat > "$tmp/reload-builtin.sh" <<'EOF'
+printf first
+printf '%s\n' 'rash.hook(function(cmd, run)' '  rash.warn("reload hook version two")' '  return run()' 'end)' > "$RASH_HOOK_DIR/advisory.lua"
+touch -d '2001-01-01 00:00:01 UTC' "$RASH_HOOK_DIR/advisory.lua"
+reloadhooks || exit
+printf second
+EOF
+
+out=$(RASH_HOOK_DIR="$reload_dir" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_RELOAD_BUILTIN=1 ${THIS_SH} "$tmp/reload-builtin.sh" 2> "$tmp/reload-builtin.err")
+status=$?
+err=$(cat "$tmp/reload-builtin.err")
+echo "reloadhooks builtin: edited hook observed: $(contains "$err" "reload hook version two")"
+echo "reloadhooks builtin: command status: $status"
+echo "reloadhooks builtin: command stdout: $out"

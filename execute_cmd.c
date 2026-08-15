@@ -452,12 +452,15 @@ execute_command (COMMAND *command)
   bitmap = new_fd_bitmap (FD_BITMAP_DEFAULT_SIZE);
   begin_unwind_frame ("execute-command");
   add_unwind_protect (uw_dispose_fd_bitmap, (char *)bitmap);
+  rash_hooks_command_begin ();
+  add_unwind_protect (rash_hooks_command_unwind, (char *)0);
 
   /* Just do the command, but not asynchronously. */
   result = execute_command_internal (command, 0, NO_PIPE, NO_PIPE, bitmap);
 
   dispose_fd_bitmap (bitmap);
   discard_unwind_frame ("execute-command");
+  rash_hooks_command_end ();
 
 #if defined (PROCESS_SUBSTITUTION)
   /* don't unlink fifos if we're in a shell function; wait until the function

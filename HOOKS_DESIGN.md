@@ -20,6 +20,20 @@ general-purpose standard libraries. A hook error, an instruction-limit error,
 or returning without `run()` falls through to later observers and then the
 original command.
 
+Normal hook configuration loads once per Rash process. Development has two
+explicit reload paths. `RASH_HOOK_RELOAD=mtime` checks a cached manifest before
+each outermost parsed command, not before nested pipeline stages, function
+bodies, loop iterations, or compound-command nodes. The manifest records the
+directory plus each `.lua` file's identity, ownership/mode, size, and
+nanosecond mtime. A changed set loads into a replacement Lua state; a rejected
+or syntactically invalid replacement leaves the active state intact.
+
+`reloadhooks` requests that same replacement without per-command checks. Rash
+only registers the builtin when it starts with `RASH_HOOK_RELOAD_BUILTIN=1`;
+without that flag it does not appear in command lookup, help, or completion.
+The builtin itself bypasses lifecycle callbacks because it replaces their Lua
+state.
+
 ## Shape
 
 One primitive, wrapping execution, in the style of Rack middleware:
