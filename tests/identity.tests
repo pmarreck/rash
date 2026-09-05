@@ -63,6 +63,12 @@ case $(${THIS_SH} -c 'exec -a bash "$0" --about' "$abs") in
 *)	echo "bash identity leaks the fork name: no" ;;
 esac
 
+# When speaking as rash, --about carries the backronym, not a vague slogan.
+case $(${THIS_SH} -c 'exec -a rash "$0" --about' "$abs") in
+*"Reversible Auditable/Agent-safe Shell, a fork of Bash"*)	echo "rash backronym: yes" ;;
+*)						echo "rash backronym: no" ;;
+esac
+
 # --about reports and exits, like --version; it must not run a -c command.
 ${THIS_SH} -c 'exec -a rash "$0" --about -c "echo RAN"' "$abs" > /dev/null 2>&1
 echo "ran the -c command: $(${THIS_SH} -c 'exec -a rash "$0" --about -c "echo RAN"' "$abs" 2>/dev/null | grep -c RAN)"

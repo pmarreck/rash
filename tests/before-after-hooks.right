@@ -1,0 +1,11 @@
+before sees expanded value: yes
+before words include hello: yes
+before command stdout: hello
+before command status: 0
+before deny fires: yes
+before deny status nonzero: yes
+before deny no stdout: yes
+after status zero: yes
+after saw stdout: yes
+after saw stderr: yes
+after command status: 0

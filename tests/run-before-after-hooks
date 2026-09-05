@@ -1,0 +1,2 @@
+${THIS_SH} ./before-after-hooks.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} before-after-hooks.right && rm -f ${BASH_TSTOUT}

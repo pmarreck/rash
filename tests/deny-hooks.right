@@ -1,0 +1,20 @@
+advisory deny ignored warning: yes
+advisory deny command status: 0
+advisory deny command stdout: ran-advisory
+enforcing sudo-tee denies: yes
+enforcing sudo-tee reason: yes
+enforcing sudo-tee leaks secret: no
+enforcing sudo-tee status nonzero: yes
+enforcing sudo-tee produced no stdout: yes
+enforcing error denies: yes
+enforcing error status nonzero: yes
+enforcing error skipped stdout: no
+enforcing error marker absent: yes
+spawn hook hits once: yes
+spawn true/false ok: no
+spawn false unexpected: no
+spawn command status: 0
+spawn command stdout: done
+sensitive clobber denies: yes
+sensitive clobber status nonzero: yes
+sensitive clobber file unchanged: yes

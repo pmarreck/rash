@@ -1,0 +1,2 @@
+${THIS_SH} ./deny-hooks.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} deny-hooks.right && rm -f ${BASH_TSTOUT}

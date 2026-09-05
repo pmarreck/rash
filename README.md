@@ -3,37 +3,40 @@ Rash
 
 [![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Frash.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
 
-Rash is an opinionated, experimental fork of GNU Bash 5.3. It preserves Bash's
-shell semantics while developing hermetic validation, compiler diversity, and a
-scoped reversible-mutation safety model.
+**Rash** — **R**eversible **A**uditable/**A**gent-safe **S**hell, a fork of
+Bash — is an opinionated, experimental fork of GNU Bash 5.3. It preserves
+Bash's shell semantics while developing hermetic validation, compiler
+diversity, and a scoped reversible-mutation safety model.
 
 Rash development uses hermetic Nix commands: `./build` and `./test` use the
 GCC baseline; `./build --zig` and `./test --zig` compile the same C sources
 with pinned Zig 0.16; `./bm` compares their release-mode execution times and
 records wall-clock, user-CPU, and system-CPU history.
 
-## Advisory lifecycle hooks
+## Lifecycle hooks (advisory + enforcing)
 
-Rash embeds LuaJIT for post-parse command lifecycle hooks. The first shipped
-hook, `warn_sudo_tee.lua`, recognizes the exact right-hand pipeline stage
-`sudo -S tee` with an input redirection. It warns that the redirect replaces
-the pipe and can expose a secret sent to standard input. It always executes
-the parsed command unchanged.
+Rash embeds LuaJIT for post-parse command lifecycle hooks. Root-owned hooks
+under `$prefix/share/rash/hooks` are **enforcing**: they may call `rash.deny`
+and fail closed on errors. Packaged policies include `deny_sudo_tee.lua`
+(blocks `… | sudo -S tee` with an input redirect) and
+`deny_sensitive_clobber.lua` (blocks `>` onto lexical path words matching
+`.ssh/`, `id_rsa`, and similar). `warn_sudo_tee.lua` remains as an advisory
+example.
 
-Installed hooks live in `$prefix/share/rash/hooks`; enable them explicitly:
+Enable the installed set:
 
 	RASH_HOOK_DIR=/usr/local/share/rash/hooks rash -c '...'
 
-Each hook must be a regular file owned by root and not writable by group or
-world. To try a user-owned hook during development, set both variables:
+User-owned hooks need `RASH_ALLOW_UNOWNED_HOOKS=1` and are **advisory only** —
+`rash.deny` is ignored with a warning. `rash.spawn({prog, ...})` runs helpers
+without re-entering the hook pipeline (no forgeable bypass env var). Lua gets
+only the safe `base` and `string` libraries.
 
-	RASH_HOOK_DIR="$PWD/hooks" RASH_ALLOW_UNOWNED_HOOKS=1 rash -c '...'
-
-Rash prints `WARNING: RASH_ALLOW_UNOWNED_HOOKS=1` for every such mutable hook.
-This opt-in loads lower-trust advisory code; it never bypasses another hook.
-All hooks in this first release are advisory: errors, a missing `run()`, or an
-instruction-limit failure still continue to the original command. Lua's
-general-purpose standard libraries are not exposed to hook files.
+`rash.before` runs on simple commands immediately after `expand_words` (aliases
+already substituted at parse time; variables/globs/command-subs resolved).
+`rash.after` runs when the simple command finishes, with `status` and — when
+the command is not already in a pipeline — capped `stdout`/`stderr` captures.
+The expanded stage can see secrets; prefer structure-only policy at parse stage.
 
 For hook development, `RASH_HOOK_RELOAD=mtime` checks the cached hook-file
 manifest before each outermost parsed command and reloads only when a hook was

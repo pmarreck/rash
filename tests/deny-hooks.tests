@@ -1,0 +1,122 @@
+# Enforcing deny + rash.spawn. Unowned hooks need RASH_HOOK_ENFORCE_UNOWNED=1
+# to exercise fail-closed / deny in hermetic tests (packaged hooks are
+# root-owned in the Nix store and enforce without that flag).
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-deny-hooks.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir "$tmp/bin" || exit 1
+cat > "$tmp/bin/sudo" <<'EOF'
+#!/bin/sh
+[ "$1" = -S ] && shift
+exec "$@"
+EOF
+chmod +x "$tmp/bin/sudo"
+printf 'redirected-input\n' > "$tmp/input"
+
+# --- advisory deny is ignored ---
+cat > "$tmp/advisory-deny.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  rash.deny("should not stop advisory execution")
+  return run()
+end)
+EOF
+
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} --norc --noprofile -c 'printf ran-advisory' 2> "$tmp/advisory.err")
+status=$?
+err=$(cat "$tmp/advisory.err")
+echo "advisory deny ignored warning: $(contains "$err" "deny ignored")"
+echo "advisory deny command status: $status"
+echo "advisory deny command stdout: $out"
+
+# --- enforcing deny stops sudo -S tee shape ---
+rm -f "$tmp"/*.lua
+cp ../hooks/deny_sudo_tee.lua "$tmp/deny_sudo_tee.lua"
+# Outermost command must be the pipeline itself (not a `;` list), or hooks
+# only see the list connector while nested execution skips hooks.
+out=$(PATH="$tmp/bin:$PATH" RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 ${THIS_SH} --norc --noprofile -c 'printf pipeline-secret | sudo -S tee < "$1"' rash-hook-test "$tmp/input" 2> "$tmp/deny.err")
+status=$?
+err=$(cat "$tmp/deny.err")
+echo "enforcing sudo-tee denies: $(contains "$err" "rash: denied:")"
+echo "enforcing sudo-tee reason: $(contains "$err" "sudo -S tee with an input redirection")"
+echo "enforcing sudo-tee leaks secret: $(contains "$err" "pipeline-secret")"
+echo "enforcing sudo-tee status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "enforcing sudo-tee produced no stdout: $( [ -z "$out" ] && echo yes || echo no )"
+
+# --- enforcing hook error fails closed ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/boom.lua" <<'EOF'
+rash.hook(function(cmd, run)
+  error("boom from enforcing hook")
+end)
+EOF
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 ${THIS_SH} --norc --noprofile -c 'printf should-not-run; echo marker > "$1"' rash-hook-test "$tmp/boom-marker" 2> "$tmp/boom.err")
+status=$?
+err=$(cat "$tmp/boom.err")
+echo "enforcing error denies: $(contains "$err" "denied")"
+echo "enforcing error status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "enforcing error skipped stdout: $(contains "$out" "should-not-run")"
+echo "enforcing error marker absent: $( [ -f "$tmp/boom-marker" ] && echo no || echo yes )"
+
+# --- spawn does not re-enter hooks ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/bin/true" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$tmp/bin/false" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$tmp/bin/true" "$tmp/bin/false"
+cat > "$tmp/spawn.lua" <<EOF
+local hits = 0
+rash.hook(function(cmd, run)
+  hits = hits + 1
+  if hits == 1 then
+    local status = rash.spawn({"$tmp/bin/true"})
+    if status ~= 0 then
+      rash.warn("spawn true failed: " .. tostring(status))
+    end
+    local bad = rash.spawn({"$tmp/bin/false"})
+    if bad == 0 then
+      rash.warn("spawn false unexpectedly succeeded")
+    end
+    rash.warn("spawn-hook-hits=" .. tostring(hits))
+  end
+  return run()
+end)
+EOF
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} --norc --noprofile -c 'printf done' 2> "$tmp/spawn.err")
+status=$?
+err=$(cat "$tmp/spawn.err")
+echo "spawn hook hits once: $(contains "$err" "spawn-hook-hits=1")"
+echo "spawn true/false ok: $(contains "$err" "spawn true failed")"
+echo "spawn false unexpected: $(contains "$err" "spawn false unexpectedly")"
+echo "spawn command status: $status"
+echo "spawn command stdout: $out"
+
+# --- sensitive clobber deny (lexical path must contain the pattern in the word) ---
+rm -f "$tmp"/*.lua
+cp ../hooks/deny_sensitive_clobber.lua "$tmp/deny_sensitive_clobber.lua"
+cat > "$tmp/clobber.sh" <<EOF
+echo new > "$tmp/home/.ssh/authorized_keys"
+EOF
+mkdir -p "$tmp/home/.ssh"
+printf 'old\n' > "$tmp/home/.ssh/authorized_keys"
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 ${THIS_SH} --norc --noprofile "$tmp/clobber.sh" 2> "$tmp/clobber.err")
+status=$?
+err=$(cat "$tmp/clobber.err")
+echo "sensitive clobber denies: $(contains "$err" "rash: denied:")"
+echo "sensitive clobber status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "sensitive clobber file unchanged: $(contains "$(cat "$tmp/home/.ssh/authorized_keys")" "old")"

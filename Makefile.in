@@ -496,7 +496,9 @@ HSOURCES = shell.h flags.h trap.h hashcmd.h hashlib.h jobs.h builtins.h \
 	   hooks.h $(BASHINCFILES)
 
 RASH_HOOKS_DIR = $(datadir)/rash/hooks
-RASH_HOOKS = $(srcdir)/hooks/warn_sudo_tee.lua
+RASH_HOOKS = $(srcdir)/hooks/warn_sudo_tee.lua \
+	$(srcdir)/hooks/deny_sudo_tee.lua \
+	$(srcdir)/hooks/deny_sensitive_clobber.lua
 
 SOURCES	 = $(CSOURCES) $(HSOURCES) $(RASH_HOOKS) $(BUILTIN_DEFS)
 
@@ -995,7 +997,9 @@ uninstall-headers:
 uninstall:	.made
 	$(RM) $(DESTDIR)$(bindir)/$(Program) $(DESTDIR)$(bindir)/bashbug
 	-( cd $(DESTDIR)$(docdir) && ${RM} ${OTHER_INSTALLED_DOCS} )
-	-$(RM) $(DESTDIR)$(RASH_HOOKS_DIR)/warn_sudo_tee.lua
+	-$(RM) $(DESTDIR)$(RASH_HOOKS_DIR)/warn_sudo_tee.lua \
+	$(DESTDIR)$(RASH_HOOKS_DIR)/deny_sudo_tee.lua \
+	$(DESTDIR)$(RASH_HOOKS_DIR)/deny_sensitive_clobber.lua
 	-( cd $(DOCDIR) ; $(MAKE) $(BASH_MAKEFLAGS) \
 		man1dir=$(man1dir) man1ext=$(man1ext) \
 		man3dir=$(man3dir) man3ext=$(man3ext) \

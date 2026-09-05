@@ -40,6 +40,8 @@
 							doInstallCheck = true;
 							installCheckPhase = ''
 								test -f "$out/share/rash/hooks/warn_sudo_tee.lua"
+test -f "$out/share/rash/hooks/deny_sudo_tee.lua"
+test -f "$out/share/rash/hooks/deny_sensitive_clobber.lua"
 							'';
 							doCheck = withTests;
 							checkTarget = "tests";
@@ -104,6 +106,8 @@
 							doInstallCheck = true;
 							installCheckPhase = ''
 								test -f "$out/share/rash/hooks/warn_sudo_tee.lua"
+test -f "$out/share/rash/hooks/deny_sudo_tee.lua"
+test -f "$out/share/rash/hooks/deny_sensitive_clobber.lua"
 							'';
 							doCheck = withTests;
 							checkTarget = "tests";

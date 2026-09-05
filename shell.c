@@ -494,7 +494,7 @@ main (int argc, char **argv, char **env)
       printf ("%s %s (%s) - %s\n", id, shell_version_string (), MACHTYPE,
 	      STREQ (id, "bash")
 		? _("GNU Bourne-Again SHell")
-		: _("reversible, agent-safe GNU Bash fork"));
+		: _("Reversible Auditable/Agent-safe Shell, a fork of Bash"));
       exit (EXECUTION_SUCCESS);
     }
 

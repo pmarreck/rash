@@ -305,7 +305,7 @@ including one the caller invents, answers as **rash**.
 $ bash --about
 bash 5.3.15(1)-release (x86_64-pc-linux-gnu) - GNU Bourne-Again SHell
 $ rash --about
-rash 5.3.15(1)-release (x86_64-pc-linux-gnu) - reversible, agent-safe GNU Bash fork
+rash 5.3.15(1)-release (x86_64-pc-linux-gnu) - Reversible Auditable/Agent-safe Shell, a fork of Bash
 ```
 
 **Why.** This is the compatibility escape hatch that makes an eventual rename

@@ -1,0 +1,69 @@
+# Expanded before-hooks and after-hooks with status / stdio capture.
+# Aliases are substituted at parse time; this stage sees expand_words() output.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-before-after.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+cat > "$tmp/before.lua" <<'LUA'
+rash.before(function(ctx)
+  local joined = ""
+  local i = 1
+  while ctx.words[i] do
+    if i > 1 then joined = joined .. "," end
+    joined = joined .. ctx.words[i]
+    i = i + 1
+  end
+  rash.warn("before-words=" .. joined)
+  rash.warn("before-line=" .. tostring(ctx.line))
+end)
+LUA
+
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} --norc --noprofile -c 'MSG=hello; printf "%s" "$MSG"' 2> "$tmp/before.err")
+status=$?
+err=$(cat "$tmp/before.err")
+# expand_words yields argv like printf,%s,hello — not a single word "hello"
+echo "before sees expanded value: $(contains "$err" "before-words=")"
+echo "before words include hello: $(contains "$err" "hello")"
+echo "before command stdout: $out"
+echo "before command status: $status"
+
+rm -f "$tmp"/*.lua
+cat > "$tmp/deny-before.lua" <<'LUA'
+rash.before(function(ctx)
+  if ctx.words[1] == "echo" and ctx.words[2] == "NOPE" then
+    rash.deny("blocked expanded echo NOPE")
+  end
+end)
+LUA
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 ${THIS_SH} --norc --noprofile -c 'echo NOPE' 2> "$tmp/deny.err")
+status=$?
+err=$(cat "$tmp/deny.err")
+echo "before deny fires: $(contains "$err" "blocked expanded echo NOPE")"
+echo "before deny status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "before deny no stdout: $( [ -z "$out" ] && echo yes || echo no )"
+
+rm -f "$tmp"/*.lua
+cat > "$tmp/after.lua" <<'LUA'
+rash.after(function(ctx)
+  rash.warn("after-status=" .. tostring(ctx.status))
+  rash.warn("after-stdout=" .. tostring(ctx.stdout))
+  rash.warn("after-stderr=" .. tostring(ctx.stderr))
+end)
+LUA
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 ${THIS_SH} --norc --noprofile -c 'printf out-data; printf err-data >&2' 2> "$tmp/after.err")
+status=$?
+err=$(cat "$tmp/after.err")
+echo "after status zero: $(contains "$err" "after-status=0")"
+echo "after saw stdout: $(contains "$err" "after-stdout=out-data")"
+echo "after saw stderr: $(contains "$err" "after-stderr=err-data")"
+echo "after command status: $status"

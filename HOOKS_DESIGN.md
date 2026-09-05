@@ -5,20 +5,55 @@ described as one. It is a structural guard against *mistakes* — which is the
 dominant failure mode when an LLM drives a shell, and the reason this is worth
 building.
 
-## Implemented first slice
+## Implemented
 
-The current implementation is advisory-only. `RASH_HOOK_DIR` selects Lua hook
-files; a regular root-owned file that is not group- or world-writable loads
-normally. A non-root-owned file requires `RASH_ALLOW_UNOWNED_HOOKS=1` and
-prints an uppercase warning that it is mutable advisory code. That variable
-chooses a lower-trust source and never suppresses a loaded hook.
+`RASH_HOOK_DIR` selects Lua hook files. A regular root-owned file that is not
+group- or world-writable loads as **enforcing**. A non-root-owned file requires
+`RASH_ALLOW_UNOWNED_HOOKS=1` and loads as **advisory** only (uppercase warning).
+`RASH_HOOK_ENFORCE_UNOWNED=1` is a test/dev override that treats unowned hooks
+as enforcing; it must not be used in production agent profiles.
 
-Hooks see unexpanded post-parse command fields through C-backed Lua userdata.
-They can inspect a connection's two sides, a simple command's words, and its
-input redirects. They cannot mutate the tree, deny a command, or invoke Lua's
-general-purpose standard libraries. A hook error, an instruction-limit error,
-or returning without `run()` falls through to later observers and then the
-original command.
+Hooks see unexpanded post-parse fields through C-backed Lua userdata: connection
+sides and connector, simple-command words, and redirects (`is_input`,
+`is_clobber`, `word`). Lua gets only the safe `base` and `string` libraries — no
+`io` / `os` / `package` / `debug` / FFI.
+
+| API | Enforcing (root-owned) | Advisory (unowned) |
+|---|---|---|
+| `rash.warn` | yes | yes |
+| `rash.deny(reason)` | aborts command, exit failure | ignored with warning; command may still run |
+| `rash.spawn({...})` | direct `fork`/`execvp`, never re-enters hooks | same |
+| hook error / skip `run()` | **fail closed** (deny) | **fail open** (continue) |
+
+Packaged hooks: `deny_sudo_tee.lua`, `deny_sensitive_clobber.lua` (plus
+`warn_sudo_tee.lua` as an advisory example). Nested `execute_command_internal`
+while `run()` is in progress does not re-enter hooks (`hook_execution_depth`),
+so parse-stage policy must match the **outermost** parsed command for that
+invocation.
+
+### Expanded before / after (simple commands)
+
+In addition to parse-stage `rash.hook`, files may register:
+
+```lua
+rash.before(function(ctx)
+  -- ctx.words: fully expanded argv (aliases already substituted at parse;
+  -- variables, globs, and command substitutions resolved by expand_words)
+  -- ctx.line: string_list(words)
+  -- rash.deny(reason) works here for enforcing hooks
+end)
+
+rash.after(function(ctx)
+  -- ctx.words / ctx.line as above
+  -- ctx.status: exit status
+  -- ctx.stdout / ctx.stderr: capped captures (64KiB) when the simple command
+  --   is not already in a pipeline/async fork; otherwise nil
+end)
+```
+
+This stage is **sensitive**: expanded words can contain secrets. Prefer
+structure-only policy at parse stage; use `before`/`after` when you truly need
+values. Captures intentionally skip pipelines so we do not break `|` plumbing.
 
 Normal hook configuration loads once per Rash process. Development has two
 explicit reload paths. `RASH_HOOK_RELOAD=mtime` checks a cached manifest before

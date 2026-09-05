@@ -644,7 +644,11 @@ execute_command_internal (COMMAND *command, int asynchronous, int pipe_in, int p
     return (EXECUTION_SUCCESS);
 
   if (rash_hooks_active ())
-    return (rash_hooks_execute (command, asynchronous, pipe_in, pipe_out, fds_to_close));
+    {
+      exec_result = rash_hooks_execute (command, asynchronous, pipe_in, pipe_out, fds_to_close);
+      last_command_exit_value = exec_result;
+      return (last_command_exit_value);
+    }
 
   QUIT;
   run_pending_traps ();
@@ -4490,6 +4494,10 @@ execute_simple_command (SIMPLE_COM *simple_command, int pipe_in, int pipe_out, i
   char *command_line, *lastarg, *temp;
   int first_word_quoted, result, builtin_is_special, already_forked, dofork;
   int fork_flags, cmdflags;
+  int capture_stdio, saved_stdout, saved_stderr, cap_out_fd, cap_err_fd;
+  char *cap_out_buf, *cap_err_buf;
+  size_t cap_out_len, cap_err_len;
+  char cap_out_path[64], cap_err_path[64];
   pid_t old_last_async_pid;
   sh_builtin_func_t *builtin;
   SHELL_VAR *func;
@@ -4660,9 +4668,67 @@ execute_simple_command (SIMPLE_COM *simple_command, int pipe_in, int pipe_out, i
 	}
     }
 
+  /* Expanded-stage before-hooks: aliases were already substituted at parse
+     time; WORDS here have variables/globs/command-subs expanded. */
+  if (already_forked == 0 && rash_hooks_before_simple (words) != 0)
+    {
+      dispose_words (words);
+      last_command_exit_value = EXECUTION_FAILURE;
+      set_pipestatus_from_exit (EXECUTION_FAILURE);
+      return (EXECUTION_FAILURE);
+    }
+
   lastarg = (char *)NULL;
+  capture_stdio = 0;
+  saved_stdout = saved_stderr = cap_out_fd = cap_err_fd = -1;
+  cap_out_buf = cap_err_buf = 0;
+  cap_out_len = cap_err_len = 0;
+  cap_out_path[0] = cap_err_path[0] = '\0';
 
   begin_unwind_frame ("simple-command");
+
+  /* Capture stdout/stderr for after-hooks only when this simple command is not
+     already part of a pipeline/async fork (those FDs belong to the pipeline). */
+  capture_stdio = already_forked == 0 && async == 0 &&
+		  pipe_in == NO_PIPE && pipe_out == NO_PIPE &&
+		  rash_hooks_want_stdio_capture ();
+  if (capture_stdio)
+    {
+      const char *tmpdir;
+      char *tp;
+
+      tmpdir = get_string_value ("TMPDIR");
+      if (tmpdir == 0 || *tmpdir == '\0')
+	tmpdir = "/tmp";
+      snprintf (cap_out_path, sizeof (cap_out_path), "%s/rash-hook-out.XXXXXX", tmpdir);
+      snprintf (cap_err_path, sizeof (cap_err_path), "%s/rash-hook-err.XXXXXX", tmpdir);
+      tp = cap_out_path;
+      cap_out_fd = mkstemp (tp);
+      tp = cap_err_path;
+      cap_err_fd = mkstemp (tp);
+      if (cap_out_fd >= 0 && cap_err_fd >= 0)
+	{
+	  saved_stdout = dup (1);
+	  saved_stderr = dup (2);
+	  if (saved_stdout >= 0 && saved_stderr >= 0 &&
+	      dup2 (cap_out_fd, 1) >= 0 && dup2 (cap_err_fd, 2) >= 0)
+	    {
+	      /* keep going with redirected stdio */
+	    }
+	  else
+	    capture_stdio = 0;
+	}
+      else
+	capture_stdio = 0;
+      if (capture_stdio == 0)
+	{
+	  if (saved_stdout >= 0) { dup2 (saved_stdout, 1); close (saved_stdout); }
+	  if (saved_stderr >= 0) { dup2 (saved_stderr, 2); close (saved_stderr); }
+	  if (cap_out_fd >= 0) { close (cap_out_fd); unlink (cap_out_path); }
+	  if (cap_err_fd >= 0) { close (cap_err_fd); unlink (cap_err_path); }
+	  saved_stdout = saved_stderr = cap_out_fd = cap_err_fd = -1;
+	}
+    }
 
   if (echo_command_at_execute && (cmdflags & CMD_COMMAND_BUILTIN) == 0)
     xtrace_print_word_list (words, 1);
@@ -4961,6 +5027,77 @@ execute_from_filesystem:
  return_result:
   bind_lastarg (lastarg);
   FREE (command_line);
+  if (capture_stdio)
+    {
+      off_t olen, elen;
+
+      fflush (stdout);
+      fflush (stderr);
+      if (saved_stdout >= 0)
+	{
+	  dup2 (saved_stdout, 1);
+	  close (saved_stdout);
+	}
+      if (saved_stderr >= 0)
+	{
+	  dup2 (saved_stderr, 2);
+	  close (saved_stderr);
+	}
+      olen = elen = 0;
+      if (cap_out_fd >= 0)
+	{
+	  olen = lseek (cap_out_fd, 0, SEEK_END);
+	  if (olen < 0)
+	    olen = 0;
+	  if (olen > (off_t)(64 * 1024))
+	    olen = 64 * 1024;
+	  if (olen > 0)
+	    {
+	      cap_out_buf = (char *)xmalloc ((size_t)olen + 1);
+	      lseek (cap_out_fd, 0, SEEK_SET);
+	      if (read (cap_out_fd, cap_out_buf, (size_t)olen) != olen)
+		{
+		  free (cap_out_buf);
+		  cap_out_buf = 0;
+		  olen = 0;
+		}
+	      else
+		cap_out_buf[olen] = '\0';
+	    }
+	  cap_out_len = (size_t)olen;
+	  close (cap_out_fd);
+	  unlink (cap_out_path);
+	}
+      if (cap_err_fd >= 0)
+	{
+	  elen = lseek (cap_err_fd, 0, SEEK_END);
+	  if (elen < 0)
+	    elen = 0;
+	  if (elen > (off_t)(64 * 1024))
+	    elen = 64 * 1024;
+	  if (elen > 0)
+	    {
+	      cap_err_buf = (char *)xmalloc ((size_t)elen + 1);
+	      lseek (cap_err_fd, 0, SEEK_SET);
+	      if (read (cap_err_fd, cap_err_buf, (size_t)elen) != elen)
+		{
+		  free (cap_err_buf);
+		  cap_err_buf = 0;
+		  elen = 0;
+		}
+	      else
+		cap_err_buf[elen] = '\0';
+	    }
+	  cap_err_len = (size_t)elen;
+	  close (cap_err_fd);
+	  unlink (cap_err_path);
+	}
+    }
+  if (already_forked == 0)
+    rash_hooks_after_simple (words, result, cap_out_buf, cap_out_len,
+			     cap_err_buf, cap_err_len);
+  free (cap_out_buf);
+  free (cap_err_buf);
   dispose_words (words);
   if (builtin)
     {
