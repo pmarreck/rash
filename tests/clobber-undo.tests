@@ -1,0 +1,187 @@
+# Safety B: on_redirect / on_clobber / snapshot_file / undo_last
+# No registered handlers → Bash-identical (no undo side effects).
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-clobber-undo.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+clear_hooks()
+{
+	# Explicit names only — host bash may have globbing disabled.
+	rm -f "$tmp/observe.lua" "$tmp/clobber-only.lua" "$tmp/undo-clobber.lua" \
+		"$tmp/undo-via-before.lua" "$tmp/undo-create.lua" "$tmp/cap.lua" \
+		"$tmp/do-undo.lua"
+}
+
+undo_dir="$tmp/undo"
+mkdir "$undo_dir" || exit 1
+
+# --- no hooks: clobber behaves like Bash; undo dir stays empty ---
+printf 'original\n' > "$tmp/target"
+out=$(RASH_UNDO_DIR="$undo_dir" ${THIS_SH} --norc --noprofile -c 'printf clobbered > "$1"' rash-test "$tmp/target" 2> "$tmp/nohook.err")
+status=$?
+echo "no-hooks clobber status: $status"
+echo "no-hooks clobber content: $(cat "$tmp/target")"
+# Empty dir: only . and .. (ls -A prints nothing)
+echo "no-hooks undo dir empty: $( [ -z "$(ls -A "$undo_dir")" ] && echo yes || echo no )"
+
+# --- on_redirect sees create vs clobber ---
+clear_hooks
+printf 'precious\n' > "$tmp/exists"
+rm -f "$tmp/absent"
+cat > "$tmp/observe.lua" <<'LUA'
+rash.on_redirect(function(ctx)
+  local tag = "other"
+  if string.find(ctx.path, "/exists", 1, true) then
+    tag = "exists"
+  elseif string.find(ctx.path, "/absent", 1, true) then
+    tag = "absent"
+  end
+  rash.warn("redir tag=" .. tag
+    .. " kind=" .. tostring(ctx.kind)
+    .. " exists=" .. tostring(ctx.exists)
+    .. " will_clobber=" .. tostring(ctx.will_clobber))
+end)
+LUA
+
+err=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$undo_dir" \
+  ${THIS_SH} --norc --noprofile -c 'printf new > "$1"; printf made > "$2"' \
+  rash-test "$tmp/exists" "$tmp/absent" 2> "$tmp/observe.err"; cat "$tmp/observe.err")
+echo "redirect clobber event: $(contains "$err" "tag=exists kind=output exists=true will_clobber=true")"
+echo "redirect create event: $(contains "$err" "tag=absent kind=output exists=false will_clobber=false")"
+echo "exists content after: $(cat "$tmp/exists")"
+echo "absent content after: $(cat "$tmp/absent")"
+
+# --- on_clobber only for will_clobber ---
+clear_hooks
+printf 'keep-me\n' > "$tmp/exists2"
+rm -f "$tmp/absent2"
+cat > "$tmp/clobber-only.lua" <<'LUA'
+rash.on_clobber(function(ctx)
+  local tag = "other"
+  if string.find(ctx.path, "/exists2", 1, true) then
+    tag = "exists2"
+  elseif string.find(ctx.path, "/absent2", 1, true) then
+    tag = "absent2"
+  end
+  rash.warn("clobber-only tag=" .. tag)
+end)
+LUA
+
+err=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$undo_dir" \
+  ${THIS_SH} --norc --noprofile -c 'printf x > "$1"; printf y > "$2"' \
+  rash-test "$tmp/exists2" "$tmp/absent2" 2> "$tmp/clobber.err"; cat "$tmp/clobber.err")
+echo "on_clobber fired for existing: $(contains "$err" "clobber-only tag=exists2")"
+echo "on_clobber skipped create: $(contains "$err" "clobber-only tag=absent2")"
+
+# --- snapshot + undo restores clobbered content ---
+clear_hooks
+# Fresh undo dir so prior tests cannot leave stack entries.
+rm -rf "$undo_dir"
+mkdir "$undo_dir" || exit 1
+printf 'before-snapshot\n' > "$tmp/restore-me"
+cat > "$tmp/undo-clobber.lua" <<'LUA'
+rash.on_clobber(function(ctx)
+  local ok, err = rash.snapshot_file(ctx.path)
+  if not ok then
+    rash.warn("snapshot failed: " .. tostring(err))
+  else
+    rash.warn("snapshotted")
+  end
+end)
+LUA
+
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$undo_dir" \
+  ${THIS_SH} --norc --noprofile -c 'printf after-clobber > "$1"' \
+  rash-test "$tmp/restore-me" 2> "$tmp/snap.err"
+echo "snapshot warned: $(contains "$(cat "$tmp/snap.err")" "snapshotted")"
+echo "content after clobber: $(cat "$tmp/restore-me")"
+
+clear_hooks
+cat > "$tmp/undo-via-before.lua" <<'LUA'
+rash.before(function(ctx)
+  if ctx.words[1] == "undo-please" then
+    local ok, err = rash.undo_last()
+    if ok then
+      rash.warn("undo-ok")
+    else
+      rash.warn("undo-fail: " .. tostring(err))
+    end
+    rash.deny("undo probe finished")
+  end
+end)
+LUA
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 RASH_UNDO_DIR="$undo_dir" \
+  ${THIS_SH} --norc --noprofile -c 'undo-please' 2> "$tmp/undo.err"
+echo "undo restored: $(contains "$(cat "$tmp/undo.err")" "undo-ok")"
+echo "content after undo: $(cat "$tmp/restore-me")"
+
+# --- originally-absent target: snapshot then undo unlinks ---
+clear_hooks
+rm -rf "$undo_dir"
+mkdir "$undo_dir" || exit 1
+rm -f "$tmp/created-then-undone"
+cat > "$tmp/undo-create.lua" <<'LUA'
+rash.on_redirect(function(ctx)
+  if ctx.kind == "output" and ctx.exists == false then
+    local ok, err = rash.snapshot_file(ctx.path)
+    if ok then
+      rash.warn("snap-absent")
+    else
+      rash.warn("snap-absent-fail: " .. tostring(err))
+    end
+  end
+end)
+LUA
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$undo_dir" \
+  ${THIS_SH} --norc --noprofile -c 'printf brand-new > "$1"' \
+  rash-test "$tmp/created-then-undone" 2> "$tmp/create.err"
+echo "snap absent: $(contains "$(cat "$tmp/create.err")" "snap-absent")"
+echo "created file present: $( [ -f "$tmp/created-then-undone" ] && echo yes || echo no )"
+
+clear_hooks
+cat > "$tmp/undo-via-before.lua" <<'LUA'
+rash.before(function(ctx)
+  if ctx.words[1] == "undo-please" then
+    local ok, err = rash.undo_last()
+    if ok then
+      rash.warn("undo-unlink-ok")
+    else
+      rash.warn("undo-unlink-fail: " .. tostring(err))
+    end
+    rash.deny("undo probe finished")
+  end
+end)
+LUA
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 RASH_UNDO_DIR="$undo_dir" \
+  ${THIS_SH} --norc --noprofile -c 'undo-please' 2> "$tmp/unlink.err"
+echo "undo unlink: $(contains "$(cat "$tmp/unlink.err")" "undo-unlink-ok")"
+echo "created file after undo: $( [ -f "$tmp/created-then-undone" ] && echo yes || echo no )"
+
+# --- oversize snapshot fails loudly (tiny cap) ---
+clear_hooks
+printf 'abcdefghij' > "$tmp/bigish"   # 10 bytes
+cat > "$tmp/cap.lua" <<'LUA'
+rash.on_clobber(function(ctx)
+  local ok, err = rash.snapshot_file(ctx.path)
+  if ok then
+    rash.warn("cap-ok")
+  else
+    rash.warn("cap-fail")
+  end
+end)
+LUA
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$undo_dir" RASH_UNDO_MAX_BYTES=4 \
+  ${THIS_SH} --norc --noprofile -c 'printf tiny > "$1"' \
+  rash-test "$tmp/bigish" 2> "$tmp/cap.err"
+echo "oversize snapshot fails: $(contains "$(cat "$tmp/cap.err")" "cap-fail")"
+echo "oversize still clobbered: $(cat "$tmp/bigish")"

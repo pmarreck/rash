@@ -248,8 +248,10 @@ This is strictly better than logging a single recursive argv. It still requires:
 ### 6.3 Redirection clobber (`>` vs `>>`)
 
 Best shell-native undo candidate at `redir.c` (resolved path, before open).
-Still TOCTOU without L5; still no coverage of writes through already-open fds
-inside an external program. See `MUTATION_SAFETY_OPTIONS.md`.
+**Landed (Safety B):** `rash.on_redirect` / `rash.on_clobber` +
+`rash.snapshot_file` / `rash.undo_last` with structured preimages under
+`RASH_UNDO_DIR`. Still TOCTOU without L5; still no coverage of writes through
+already-open fds inside an external program. See `MUTATION_SAFETY_OPTIONS.md`.
 
 ---
 

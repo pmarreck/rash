@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
+
+#include "maxpath.h"
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -37,6 +40,9 @@
 #define RASH_DENY_REASON_MAX 512
 #define RASH_SPAWN_OUTPUT_MAX (64 * 1024)
 #define RASH_SPAWN_ARGV_MAX 64
+#define RASH_UNDO_DEFAULT_MAX_BYTES (256ULL * 1024ULL * 1024ULL)
+#define RASH_UNDO_ERR_MAX 256
+#define RASH_UNDO_PATH_BUF (PATH_MAX + 32)
 
 #if defined (HAVE_LSTAT)
 #  define RASH_LSTAT lstat
@@ -91,16 +97,23 @@ static lua_State *retired_lua;
 static int hook_table_ref = LUA_NOREF;
 static int before_table_ref = LUA_NOREF;
 static int after_table_ref = LUA_NOREF;
+static int redirect_table_ref = LUA_NOREF;
+static int clobber_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
+static int redirect_count;
+static int clobber_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
+static int *redirect_enforcing;
+static int *clobber_enforcing;
 static int loading_file_enforcing;
 static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
+static int in_redirect_stage;
 static int stage_denied;
 static char stage_deny_reason[RASH_DENY_REASON_MAX];
 static int hook_state;
@@ -117,6 +130,10 @@ static int rash_lua_instruction_ticks;
 static int rash_lua_hook (lua_State *);
 static int rash_lua_before (lua_State *);
 static int rash_lua_after (lua_State *);
+static int rash_lua_on_redirect (lua_State *);
+static int rash_lua_on_clobber (lua_State *);
+static int rash_lua_snapshot_file (lua_State *);
+static int rash_lua_undo_last (lua_State *);
 static int rash_lua_warn (lua_State *);
 static int rash_lua_deny (lua_State *);
 static int rash_lua_spawn (lua_State *);
@@ -129,6 +146,16 @@ static int rash_hooks_initialize (int);
 static void rash_mark_denied (RASH_HOOK_CONTEXT *, const char *);
 static void rash_push_expanded_ctx (lua_State *, WORD_LIST *, int,
 				   const char *, size_t, const char *, size_t);
+static const char *rash_redirect_kind (enum r_instruction);
+static int rash_redirect_will_clobber (enum r_instruction, int, int);
+static void rash_push_redirect_ctx (lua_State *, const char *, enum r_instruction,
+				   int, int, int);
+static char *rash_undo_dir (void);
+static unsigned long long rash_undo_max_bytes (void);
+static int rash_undo_ensure_dir (const char *, char *, size_t);
+static char *rash_undo_abspath (const char *);
+static int rash_undo_copy_file (const char *, const char *, off_t);
+static int rash_hooks_have_redirect_observers (void);
 
 static void
 rash_hooks_close_retired_lua (void)
@@ -392,6 +419,20 @@ rash_lua_after (lua_State *L)
   return rash_register_callback (L, after_table_ref, &after_enforcing, &after_count);
 }
 
+static int
+rash_lua_on_redirect (lua_State *L)
+{
+  /* Fires in redir.c after path resolve, before open(2). */
+  return rash_register_callback (L, redirect_table_ref, &redirect_enforcing, &redirect_count);
+}
+
+static int
+rash_lua_on_clobber (lua_State *L)
+{
+  /* Effect filter: truncating redirect onto an existing regular file. */
+  return rash_register_callback (L, clobber_table_ref, &clobber_enforcing, &clobber_count);
+}
+
 static void
 rash_mark_denied (RASH_HOOK_CONTEXT *context, const char *reason)
 {
@@ -426,8 +467,8 @@ rash_lua_deny (lua_State *L)
       return 0;
     }
 
-  /* Expanded-stage before hooks use stage_denied; parse-stage uses context. */
-  if (in_before_stage)
+  /* Expanded-stage before / redirect sensors use stage_denied; parse-stage uses context. */
+  if (in_before_stage || in_redirect_stage)
     {
       if (stage_denied == 0)
 	{
@@ -809,6 +850,14 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "before");
   lua_pushcfunction (L, rash_lua_after);
   lua_setfield (L, -2, "after");
+  lua_pushcfunction (L, rash_lua_on_redirect);
+  lua_setfield (L, -2, "on_redirect");
+  lua_pushcfunction (L, rash_lua_on_clobber);
+  lua_setfield (L, -2, "on_clobber");
+  lua_pushcfunction (L, rash_lua_snapshot_file);
+  lua_setfield (L, -2, "snapshot_file");
+  lua_pushcfunction (L, rash_lua_undo_last);
+  lua_setfield (L, -2, "undo_last");
   lua_pushcfunction (L, rash_lua_warn);
   lua_setfield (L, -2, "warn");
   lua_pushcfunction (L, rash_lua_deny);
@@ -828,6 +877,10 @@ rash_lua_ready (void)
   before_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   lua_newtable (L);
   after_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  redirect_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  clobber_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   rash_lua = L;
   return 1;
 }
@@ -1093,8 +1146,11 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
 {
   lua_State *previous_lua;
   int *previous_enforcing, *previous_before_enforcing, *previous_after_enforcing;
+  int *previous_redirect_enforcing, *previous_clobber_enforcing;
   int previous_count, previous_before_count, previous_after_count;
-  int previous_ref, previous_before_ref, previous_after_ref, previous_state;
+  int previous_redirect_count, previous_clobber_count;
+  int previous_ref, previous_before_ref, previous_after_ref;
+  int previous_redirect_ref, previous_clobber_ref, previous_state;
   int loaded, snapshotted;
   RASH_HOOK_MANIFEST manifest;
 
@@ -1103,17 +1159,26 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   previous_ref = hook_table_ref;
   previous_before_ref = before_table_ref;
   previous_after_ref = after_table_ref;
+  previous_redirect_ref = redirect_table_ref;
+  previous_clobber_ref = clobber_table_ref;
   previous_count = hook_count;
   previous_before_count = before_count;
   previous_after_count = after_count;
+  previous_redirect_count = redirect_count;
+  previous_clobber_count = clobber_count;
   previous_enforcing = hook_enforcing;
   previous_before_enforcing = before_enforcing;
   previous_after_enforcing = after_enforcing;
+  previous_redirect_enforcing = redirect_enforcing;
+  previous_clobber_enforcing = clobber_enforcing;
   previous_state = hook_state;
   rash_lua = 0;
   hook_table_ref = before_table_ref = after_table_ref = LUA_NOREF;
+  redirect_table_ref = clobber_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
+  redirect_count = clobber_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
+  redirect_enforcing = clobber_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -1123,12 +1188,15 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
 
   if (loaded && snapshotted)
     {
-      hook_state = (hook_count > 0 || before_count > 0 || after_count > 0) ? 1 : -1;
+      hook_state = (hook_count > 0 || before_count > 0 || after_count > 0
+		    || redirect_count > 0 || clobber_count > 0) ? 1 : -1;
       rash_hook_save_configuration (directory, allow_unowned, enforce_unowned);
       rash_hook_manifest_replace (&manifest);
       free (previous_enforcing);
       free (previous_before_enforcing);
       free (previous_after_enforcing);
+      free (previous_redirect_enforcing);
+      free (previous_clobber_enforcing);
       if (previous_lua)
 	{
 	  if (hook_execution_depth)
@@ -1144,16 +1212,24 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   free (hook_enforcing);
   free (before_enforcing);
   free (after_enforcing);
+  free (redirect_enforcing);
+  free (clobber_enforcing);
   rash_lua = previous_lua;
   hook_table_ref = previous_ref;
   before_table_ref = previous_before_ref;
   after_table_ref = previous_after_ref;
+  redirect_table_ref = previous_redirect_ref;
+  clobber_table_ref = previous_clobber_ref;
   hook_count = previous_count;
   before_count = previous_before_count;
   after_count = previous_after_count;
+  redirect_count = previous_redirect_count;
+  clobber_count = previous_clobber_count;
   hook_enforcing = previous_enforcing;
   before_enforcing = previous_before_enforcing;
   after_enforcing = previous_after_enforcing;
+  redirect_enforcing = previous_redirect_enforcing;
+  clobber_enforcing = previous_clobber_enforcing;
   hook_state = previous_lua ? previous_state : -1;
   rash_hook_save_configuration (directory, allow_unowned, enforce_unowned);
   if (snapshotted)
@@ -1366,6 +1442,712 @@ rash_push_expanded_ctx (lua_State *L, WORD_LIST *words, int status,
   else
     lua_pushnil (L);
   lua_setfield (L, -2, "stderr");
+}
+
+static const char *
+rash_redirect_kind (enum r_instruction ri)
+{
+  switch (ri)
+    {
+    case r_output_direction: return "output";
+    case r_output_force: return "force";
+    case r_appending_to: return "append";
+    case r_input_direction: return "input";
+    case r_inputa_direction: return "inputa";
+    case r_err_and_out: return "err_and_out";
+    case r_append_err_and_out: return "append_err_and_out";
+    case r_input_output: return "input_output";
+    default: return "other";
+    }
+}
+
+static int
+rash_redirect_will_clobber (enum r_instruction ri, int exists, int is_reg)
+{
+  if (exists == 0 || is_reg == 0)
+    return 0;
+  return (ri == r_output_direction || ri == r_output_force || ri == r_err_and_out);
+}
+
+static void
+rash_push_redirect_ctx (lua_State *L, const char *path, enum r_instruction ri,
+			int redirector_fd, int exists, int will_clobber)
+{
+  lua_newtable (L);
+  lua_pushstring (L, path ? path : "");
+  lua_setfield (L, -2, "path");
+  lua_pushstring (L, rash_redirect_kind (ri));
+  lua_setfield (L, -2, "kind");
+  lua_pushinteger (L, redirector_fd);
+  lua_setfield (L, -2, "fd");
+  lua_pushboolean (L, exists);
+  lua_setfield (L, -2, "exists");
+  lua_pushboolean (L, will_clobber);
+  lua_setfield (L, -2, "will_clobber");
+}
+
+static int
+rash_hooks_have_redirect_observers (void)
+{
+  return redirect_count > 0 || clobber_count > 0;
+}
+
+static char *
+rash_undo_dir (void)
+{
+  const char *configured, *tmpdir;
+  char *dir;
+  size_t length;
+
+  configured = getenv ("RASH_UNDO_DIR");
+  if (configured && configured[0])
+    return savestring (configured);
+
+  tmpdir = getenv ("TMPDIR");
+  if (tmpdir == 0 || tmpdir[0] == '\0')
+    tmpdir = "/tmp";
+  length = strlen (tmpdir) + 64;
+  dir = (char *)xmalloc (length);
+  snprintf (dir, length, "%s/rash-undo-%ld", tmpdir, (long)getpid ());
+  return dir;
+}
+
+static unsigned long long
+rash_undo_max_bytes (void)
+{
+  const char *raw;
+  char *end;
+  unsigned long long value;
+
+  raw = getenv ("RASH_UNDO_MAX_BYTES");
+  if (raw == 0 || raw[0] == '\0')
+    return RASH_UNDO_DEFAULT_MAX_BYTES;
+  errno = 0;
+  value = strtoull (raw, &end, 10);
+  if (errno != 0 || end == raw || *end != '\0')
+    return RASH_UNDO_DEFAULT_MAX_BYTES;
+  return value;
+}
+
+static int
+rash_undo_ensure_dir (const char *dir, char *err, size_t err_len)
+{
+  struct stat st;
+
+  if (mkdir (dir, 0700) == 0)
+    return 1;
+  if (errno != EEXIST)
+    {
+      snprintf (err, err_len, "cannot create undo dir: %s", strerror (errno));
+      return 0;
+    }
+  if (stat (dir, &st) != 0 || S_ISDIR (st.st_mode) == 0)
+    {
+      snprintf (err, err_len, "RASH_UNDO_DIR is not a directory");
+      return 0;
+    }
+  return 1;
+}
+
+static char *
+rash_undo_abspath (const char *path)
+{
+  char cwd[PATH_MAX];
+  char *result;
+  size_t length;
+
+  if (path == 0)
+    return savestring ("");
+  if (path[0] == '/')
+    return savestring (path);
+  if (getcwd (cwd, sizeof (cwd)) == 0)
+    return savestring (path);
+  length = strlen (cwd) + 1 + strlen (path) + 1;
+  result = (char *)xmalloc (length);
+  snprintf (result, length, "%s/%s", cwd, path);
+  return result;
+}
+
+static int
+rash_undo_copy_file (const char *src, const char *dst, off_t expected_size)
+{
+  int in_fd, out_fd, rc;
+  char buf[8192];
+  ssize_t nread, nwrite;
+  off_t total;
+
+  in_fd = open (src, O_RDONLY);
+  if (in_fd < 0)
+    return -1;
+  out_fd = open (dst, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (out_fd < 0)
+    {
+      close (in_fd);
+      return -1;
+    }
+
+  total = 0;
+  rc = 0;
+  while ((nread = read (in_fd, buf, sizeof (buf))) > 0)
+    {
+      char *p;
+      ssize_t left;
+
+      p = buf;
+      left = nread;
+      while (left > 0)
+	{
+	  nwrite = write (out_fd, p, (size_t)left);
+	  if (nwrite < 0)
+	    {
+	      rc = -1;
+	      break;
+	    }
+	  p += nwrite;
+	  left -= nwrite;
+	}
+      if (rc < 0)
+	break;
+      total += nread;
+      if (expected_size >= 0 && total > expected_size)
+	{
+	  rc = -1;
+	  break;
+	}
+    }
+  if (nread < 0)
+    rc = -1;
+  if (expected_size >= 0 && total != expected_size)
+    rc = -1;
+
+  if (close (out_fd) != 0)
+    rc = -1;
+  close (in_fd);
+  if (rc < 0)
+    unlink (dst);
+  return rc;
+}
+
+static unsigned long
+rash_undo_next_seq (const char *dir, char *err, size_t err_len)
+{
+  char seq_path[RASH_UNDO_PATH_BUF];
+  char buf[32];
+  int fd;
+  unsigned long seq;
+  ssize_t n;
+
+  snprintf (seq_path, sizeof (seq_path), "%s/seq", dir);
+  fd = open (seq_path, O_RDWR | O_CREAT, 0600);
+  if (fd < 0)
+    {
+      snprintf (err, err_len, "cannot open undo seq: %s", strerror (errno));
+      return 0;
+    }
+  n = read (fd, buf, sizeof (buf) - 1);
+  if (n < 0)
+    {
+      snprintf (err, err_len, "cannot read undo seq: %s", strerror (errno));
+      close (fd);
+      return 0;
+    }
+  buf[n > 0 ? n : 0] = '\0';
+  seq = strtoul (buf, 0, 10);
+  if (seq == 0)
+    seq = 1;
+  else
+    seq++;
+  if (lseek (fd, 0, SEEK_SET) < 0 || ftruncate (fd, 0) < 0)
+    {
+      snprintf (err, err_len, "cannot reset undo seq: %s", strerror (errno));
+      close (fd);
+      return 0;
+    }
+  n = snprintf (buf, sizeof (buf), "%lu\n", seq);
+  if (write (fd, buf, (size_t)n) != n)
+    {
+      snprintf (err, err_len, "cannot write undo seq: %s", strerror (errno));
+      close (fd);
+      return 0;
+    }
+  close (fd);
+  return seq;
+}
+
+static int
+rash_lua_snapshot_file (lua_State *L)
+{
+  const char *path;
+  char *dir, *abspath;
+  char err[RASH_UNDO_ERR_MAX];
+  char entry_dir[RASH_UNDO_PATH_BUF], meta_path[RASH_UNDO_PATH_BUF];
+  char data_path[RASH_UNDO_PATH_BUF], path_file[RASH_UNDO_PATH_BUF];
+  struct stat st;
+  unsigned long seq;
+  int existed, fd;
+  FILE *meta;
+  unsigned long long max_bytes;
+
+  path = luaL_checkstring (L, 1);
+  dir = rash_undo_dir ();
+  err[0] = '\0';
+  if (rash_undo_ensure_dir (dir, err, sizeof (err)) == 0)
+    {
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+
+  abspath = rash_undo_abspath (path);
+  existed = (RASH_LSTAT (abspath, &st) == 0);
+  if (existed && S_ISREG (st.st_mode) == 0)
+    {
+      snprintf (err, sizeof (err), "not a regular file");
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+  max_bytes = rash_undo_max_bytes ();
+  if (existed && (unsigned long long)st.st_size > max_bytes)
+    {
+      snprintf (err, sizeof (err), "file exceeds RASH_UNDO_MAX_BYTES");
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+
+  seq = rash_undo_next_seq (dir, err, sizeof (err));
+  if (seq == 0)
+    {
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+
+  snprintf (entry_dir, sizeof (entry_dir), "%s/%06lu", dir, seq);
+  if (mkdir (entry_dir, 0700) != 0)
+    {
+      snprintf (err, sizeof (err), "cannot create undo entry: %s", strerror (errno));
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+
+  snprintf (path_file, sizeof (path_file), "%s/path", entry_dir);
+  fd = open (path_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0 || write (fd, abspath, strlen (abspath)) != (ssize_t)strlen (abspath))
+    {
+      if (fd >= 0)
+	close (fd);
+      snprintf (err, sizeof (err), "cannot write undo path: %s", strerror (errno));
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+  close (fd);
+
+  snprintf (meta_path, sizeof (meta_path), "%s/meta", entry_dir);
+  meta = fopen (meta_path, "w");
+  if (meta == 0)
+    {
+      snprintf (err, sizeof (err), "cannot write undo meta: %s", strerror (errno));
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+  if (existed)
+    {
+      snprintf (data_path, sizeof (data_path), "%s/data", entry_dir);
+      if (rash_undo_copy_file (abspath, data_path, st.st_size) != 0)
+	{
+	  fclose (meta);
+	  unlink (data_path);
+	  snprintf (err, sizeof (err), "cannot copy preimage: %s", strerror (errno));
+	  free (abspath);
+	  free (dir);
+	  lua_pushboolean (L, 0);
+	  lua_pushstring (L, err);
+	  return 2;
+	}
+      fprintf (meta, "existed=1\nmode=%lu\nsize=%lld\n",
+	       (unsigned long)(st.st_mode & 07777),
+	       (long long)st.st_size);
+    }
+  else
+    fprintf (meta, "existed=0\n");
+  fclose (meta);
+
+  free (abspath);
+  free (dir);
+  lua_pushboolean (L, 1);
+  return 1;
+}
+
+static int
+rash_undo_read_meta (const char *meta_path, int *existed, mode_t *mode, off_t *size)
+{
+  FILE *meta;
+  char line[128];
+
+  *existed = 0;
+  *mode = 0600;
+  *size = 0;
+  meta = fopen (meta_path, "r");
+  if (meta == 0)
+    return 0;
+  while (fgets (line, sizeof (line), meta))
+    {
+      if (strncmp (line, "existed=", 8) == 0)
+	*existed = atoi (line + 8);
+      else if (strncmp (line, "mode=", 5) == 0)
+	*mode = (mode_t)strtoul (line + 5, 0, 0);
+      else if (strncmp (line, "size=", 5) == 0)
+	*size = (off_t)strtoll (line + 5, 0, 10);
+    }
+  fclose (meta);
+  return 1;
+}
+
+static char *
+rash_undo_read_path (const char *path_file)
+{
+  int fd;
+  off_t length;
+  char *buf;
+  ssize_t n;
+
+  fd = open (path_file, O_RDONLY);
+  if (fd < 0)
+    return 0;
+  length = lseek (fd, 0, SEEK_END);
+  if (length < 0)
+    {
+      close (fd);
+      return 0;
+    }
+  if (lseek (fd, 0, SEEK_SET) < 0)
+    {
+      close (fd);
+      return 0;
+    }
+  buf = (char *)xmalloc ((size_t)length + 1);
+  n = read (fd, buf, (size_t)length);
+  close (fd);
+  if (n != length)
+    {
+      free (buf);
+      return 0;
+    }
+  buf[length] = '\0';
+  return buf;
+}
+
+static void
+rash_undo_remove_entry (const char *entry_dir)
+{
+  char path[RASH_UNDO_PATH_BUF];
+
+  snprintf (path, sizeof (path), "%s/data", entry_dir);
+  unlink (path);
+  snprintf (path, sizeof (path), "%s/meta", entry_dir);
+  unlink (path);
+  snprintf (path, sizeof (path), "%s/path", entry_dir);
+  unlink (path);
+  rmdir (entry_dir);
+}
+
+static unsigned long
+rash_undo_latest_seq (const char *dir)
+{
+  char seq_path[RASH_UNDO_PATH_BUF];
+  char buf[32];
+  int fd;
+  ssize_t n;
+  unsigned long seq;
+
+  snprintf (seq_path, sizeof (seq_path), "%s/seq", dir);
+  fd = open (seq_path, O_RDONLY);
+  if (fd < 0)
+    return 0;
+  n = read (fd, buf, sizeof (buf) - 1);
+  close (fd);
+  if (n <= 0)
+    return 0;
+  buf[n] = '\0';
+  seq = strtoul (buf, 0, 10);
+  return seq;
+}
+
+static int
+rash_lua_undo_last (lua_State *L)
+{
+  char *dir, *target;
+  char err[RASH_UNDO_ERR_MAX];
+  char entry_dir[RASH_UNDO_PATH_BUF], meta_path[RASH_UNDO_PATH_BUF];
+  char data_path[RASH_UNDO_PATH_BUF], path_file[RASH_UNDO_PATH_BUF];
+  char seq_path[RASH_UNDO_PATH_BUF], buf[32];
+  unsigned long seq;
+  int existed, fd, out_fd;
+  mode_t mode;
+  off_t size;
+  ssize_t n;
+
+  dir = rash_undo_dir ();
+  err[0] = '\0';
+  if (rash_undo_ensure_dir (dir, err, sizeof (err)) == 0)
+    {
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, err);
+      return 2;
+    }
+
+  seq = rash_undo_latest_seq (dir);
+  while (seq > 0)
+    {
+      snprintf (entry_dir, sizeof (entry_dir), "%s/%06lu", dir, seq);
+      snprintf (meta_path, sizeof (meta_path), "%s/meta", entry_dir);
+      if (access (meta_path, F_OK) == 0)
+	break;
+      seq--;
+    }
+  if (seq == 0)
+    {
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, "undo stack empty");
+      return 2;
+    }
+
+  snprintf (path_file, sizeof (path_file), "%s/path", entry_dir);
+  target = rash_undo_read_path (path_file);
+  if (target == 0 || rash_undo_read_meta (meta_path, &existed, &mode, &size) == 0)
+    {
+      free (target);
+      free (dir);
+      lua_pushboolean (L, 0);
+      lua_pushstring (L, "corrupt undo entry");
+      return 2;
+    }
+
+  if (existed == 0)
+    {
+      if (unlink (target) != 0 && errno != ENOENT)
+	{
+	  snprintf (err, sizeof (err), "cannot unlink: %s", strerror (errno));
+	  free (target);
+	  free (dir);
+	  lua_pushboolean (L, 0);
+	  lua_pushstring (L, err);
+	  return 2;
+	}
+    }
+  else
+    {
+      snprintf (data_path, sizeof (data_path), "%s/data", entry_dir);
+      out_fd = open (target, O_WRONLY | O_CREAT | O_TRUNC, mode);
+      if (out_fd < 0)
+	{
+	  snprintf (err, sizeof (err), "cannot restore: %s", strerror (errno));
+	  free (target);
+	  free (dir);
+	  lua_pushboolean (L, 0);
+	  lua_pushstring (L, err);
+	  return 2;
+	}
+      fd = open (data_path, O_RDONLY);
+      if (fd < 0)
+	{
+	  close (out_fd);
+	  snprintf (err, sizeof (err), "missing preimage data");
+	  free (target);
+	  free (dir);
+	  lua_pushboolean (L, 0);
+	  lua_pushstring (L, err);
+	  return 2;
+	}
+      {
+	char copy_buf[8192];
+	ssize_t nread, nwrite;
+
+	while ((nread = read (fd, copy_buf, sizeof (copy_buf))) > 0)
+	  {
+	    char *p = copy_buf;
+	    ssize_t left = nread;
+	    while (left > 0)
+	      {
+		nwrite = write (out_fd, p, (size_t)left);
+		if (nwrite < 0)
+		  {
+		    close (fd);
+		    close (out_fd);
+		    snprintf (err, sizeof (err), "restore write failed: %s", strerror (errno));
+		    free (target);
+		    free (dir);
+		    lua_pushboolean (L, 0);
+		    lua_pushstring (L, err);
+		    return 2;
+		  }
+		p += nwrite;
+		left -= nwrite;
+	      }
+	  }
+	if (nread < 0)
+	  {
+	    close (fd);
+	    close (out_fd);
+	    snprintf (err, sizeof (err), "restore read failed: %s", strerror (errno));
+	    free (target);
+	    free (dir);
+	    lua_pushboolean (L, 0);
+	    lua_pushstring (L, err);
+	    return 2;
+	  }
+      }
+      close (fd);
+      if (fchmod (out_fd, mode) != 0)
+	{
+	  close (out_fd);
+	  snprintf (err, sizeof (err), "cannot restore mode: %s", strerror (errno));
+	  free (target);
+	  free (dir);
+	  lua_pushboolean (L, 0);
+	  lua_pushstring (L, err);
+	  return 2;
+	}
+      close (out_fd);
+    }
+
+  rash_undo_remove_entry (entry_dir);
+  snprintf (seq_path, sizeof (seq_path), "%s/seq", dir);
+  fd = open (seq_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd >= 0)
+    {
+      n = snprintf (buf, sizeof (buf), "%lu\n", seq > 0 ? seq - 1 : 0);
+      if (n > 0)
+	{
+	  ssize_t wrote;
+
+	  wrote = write (fd, buf, (size_t)n);
+	  (void)wrote;
+	}
+      close (fd);
+    }
+
+  free (target);
+  free (dir);
+  lua_pushboolean (L, 1);
+  return 1;
+}
+
+int
+rash_hooks_on_redirect (const char *path, enum r_instruction ri, int redirector_fd)
+{
+  struct stat st;
+  int exists, is_reg, will_clobber, i, base, status;
+
+  if (path == 0)
+    return 0;
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || rash_lua == 0 || rash_hooks_have_redirect_observers () == 0)
+    return 0;
+
+  exists = (RASH_LSTAT (path, &st) == 0);
+  is_reg = exists && S_ISREG (st.st_mode);
+  will_clobber = rash_redirect_will_clobber (ri, exists, is_reg);
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_redirect_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= redirect_count; i++)
+    {
+      current_hook_enforcing = redirect_enforcing && redirect_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, redirect_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      rash_push_redirect_ctx (rash_lua, path, ri, redirector_fd, exists, will_clobber);
+      status = rash_lua_pcall (rash_lua, 1, 0);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing on_redirect failed; denying redirect: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing on_redirect failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory on_redirect failed; continuing: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  if (stage_denied == 0 && will_clobber)
+    {
+      for (i = 1; i <= clobber_count; i++)
+	{
+	  current_hook_enforcing = clobber_enforcing && clobber_enforcing[i - 1];
+	  lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, clobber_table_ref);
+	  lua_rawgeti (rash_lua, -1, i);
+	  lua_remove (rash_lua, -2);
+	  rash_push_redirect_ctx (rash_lua, path, ri, redirector_fd, exists, will_clobber);
+	  status = rash_lua_pcall (rash_lua, 1, 0);
+	  if (status != 0)
+	    {
+	      const char *lua_error;
+
+	      lua_error = lua_tostring (rash_lua, -1);
+	      if (current_hook_enforcing)
+		{
+		  rash_hook_warning ("enforcing on_clobber failed; denying redirect: ",
+				     lua_error ? lua_error : "(no error object)");
+		  lua_pop (rash_lua, 1);
+		  stage_denied = 1;
+		  fprintf (stderr, "rash: denied: enforcing on_clobber failed\n");
+		}
+	      else
+		{
+		  rash_hook_warning ("advisory on_clobber failed; continuing: ",
+				     lua_error ? lua_error : "(no error object)");
+		  lua_pop (rash_lua, 1);
+		}
+	    }
+	  if (stage_denied)
+	    break;
+	}
+    }
+
+  lua_settop (rash_lua, base);
+  in_redirect_stage = 0;
+  current_hook_enforcing = 0;
+  return stage_denied ? 1 : 0;
 }
 
 int

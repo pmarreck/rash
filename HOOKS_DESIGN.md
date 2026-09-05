@@ -55,6 +55,45 @@ This stage is **sensitive**: expanded words can contain secrets. Prefer
 structure-only policy at parse stage; use `before`/`after` when you truly need
 values. Captures intentionally skip pipelines so we do not break `|` plumbing.
 
+### Redirect sensors + clobber undo
+
+Path-bearing redirects fire a thin C sensor in `redir.c` after the path is
+resolved and **before** `open(2)` (so preimages are still intact):
+
+```lua
+rash.on_redirect(function(ctx)
+  -- ctx.path, ctx.fd, ctx.kind
+  --   kind: "output" | "force" | "append" | "input" | "err_and_out" |
+  --         "append_err_and_out" | "input_output" | …
+  -- ctx.exists, ctx.will_clobber
+end)
+
+-- Effect filter: truncating redirect onto an existing regular file
+rash.on_clobber(function(ctx)
+  local ok, err = rash.snapshot_file(ctx.path)  -- structured preimage
+  -- …
+end)
+
+-- Later (any hook stage that can call into C ports):
+local ok, err = rash.undo_last()
+```
+
+`will_clobber` is true only when the instruction truncates (`>`, `>|`, `&>`)
+and the resolved path already exists as a regular file. Creating a new file
+with `>` is `exists=false` / `will_clobber=false`; snapshot that case too if
+you want undo to **unlink**.
+
+Undo storage:
+
+| Variable | Default |
+|---|---|
+| `RASH_UNDO_DIR` | `$TMPDIR/rash-undo-<pid>` |
+| `RASH_UNDO_MAX_BYTES` | `268435456` (256 MiB) |
+
+Oversize or non-regular targets fail `snapshot_file` loudly (no silent skip).
+Fd-duplication / close redirects (`>&2`, `n<&-`) have no path and are outside
+this family. Packaged example: `undo_precious_clobber.lua` (opt-in).
+
 Normal hook configuration loads once per Rash process. Development has two
 explicit reload paths. `RASH_HOOK_RELOAD=mtime` checks a cached manifest before
 each outermost parsed command, not before nested pipeline stages, function

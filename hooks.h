@@ -15,6 +15,8 @@ extern int rash_hooks_before_simple (WORD_LIST *words);
 extern void rash_hooks_after_simple (WORD_LIST *words, int status,
 				    const char *captured_stdout, size_t stdout_len,
 				    const char *captured_stderr, size_t stderr_len);
+/* Before open(2) for a path-bearing redirect. Non-zero → RASH_DENIED_REDIRECT. */
+extern int rash_hooks_on_redirect (const char *path, enum r_instruction ri, int redirector_fd);
 extern int rash_hooks_want_stdio_capture (void);
 extern void rash_hooks_command_begin (void);
 extern void rash_hooks_command_end (void);

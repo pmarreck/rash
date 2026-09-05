@@ -1,0 +1,19 @@
+no-hooks clobber status: 0
+no-hooks clobber content: clobbered
+no-hooks undo dir empty: yes
+redirect clobber event: yes
+redirect create event: yes
+exists content after: new
+absent content after: made
+on_clobber fired for existing: yes
+on_clobber skipped create: no
+snapshot warned: yes
+content after clobber: after-clobber
+undo restored: yes
+content after undo: before-snapshot
+snap absent: yes
+created file present: yes
+undo unlink: yes
+created file after undo: no
+oversize snapshot fails: yes
+oversize still clobbered: tiny

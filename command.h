@@ -44,6 +44,7 @@ enum r_instruction {
 #define RESTRICTED_REDIRECT -3	/* can only happen in restricted shells. */
 #define HEREDOC_REDIRECT    -4  /* here-doc temp file can't be created */
 #define BADVAR_REDIRECT	    -5  /* something wrong with {varname}redir */
+#define RASH_DENIED_REDIRECT -6 /* lifecycle hook denied this redirection */
 
 #define CLOBBERING_REDIRECT(ri) \
   (ri == r_output_direction || ri == r_err_and_out)

@@ -53,6 +53,7 @@ extern int errno;
 #include "execute_cmd.h"
 #include "redir.h"
 #include "trap.h"
+#include "hooks.h"
 
 #include "input.h"
 
@@ -217,6 +218,10 @@ redirection_error (REDIRECT *temp, int error, char *fn)
 
     case BADVAR_REDIRECT:
       internal_error ("%s: %s", filename, _("cannot assign fd to variable"));
+      break;
+
+    case RASH_DENIED_REDIRECT:
+      /* rash.deny (or enforcing sensor failure) already printed the reason. */
       break;
 
     default:
@@ -923,13 +928,23 @@ do_redirection_internal (REDIRECT *redirect, int flags, char **fnp)
 	}
 #endif /* RESTRICTED_SHELL */
 
+      /* Path resolved; file still intact. Sensor may snapshot or deny. */
+      if (rash_hooks_on_redirect (redirectee_word, ri, redirector))
+	{
+	  if (fnp)
+	    *fnp = redirectee_word;
+	  else
+	    free (redirectee_word);
+	  return (RASH_DENIED_REDIRECT);
+	}
+
       fd = redir_open (redirectee_word, redirect->flags, 0666, ri);
       if (fnp)
 	*fnp = redirectee_word;
       else
 	free (redirectee_word);
 
-      if (fd == NOCLOBBER_REDIRECT || fd == RESTRICTED_REDIRECT)
+      if (fd == NOCLOBBER_REDIRECT || fd == RESTRICTED_REDIRECT || fd == RASH_DENIED_REDIRECT)
 	return (fd);
 
       if (fd < 0)

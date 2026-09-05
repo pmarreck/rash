@@ -38,6 +38,15 @@ already substituted at parse time; variables/globs/command-subs resolved).
 the command is not already in a pipeline — capped `stdout`/`stderr` captures.
 The expanded stage can see secrets; prefer structure-only policy at parse stage.
 
+Redirect sensors fire after path resolve and before `open(2)`:
+`rash.on_redirect` (all path-bearing redirects) and `rash.on_clobber` (only
+when a truncating redirect would overwrite an existing regular file).
+`rash.snapshot_file` / `rash.undo_last` store structured preimages under
+`RASH_UNDO_DIR` (default `$TMPDIR/rash-undo-<pid>`), capped by
+`RASH_UNDO_MAX_BYTES` (default 256 MiB). Snapshotting a not-yet-created path
+makes undo unlink it. Packaged example: `undo_precious_clobber.lua` (opt-in;
+shell redirects only — not a substitute for COW).
+
 For hook development, `RASH_HOOK_RELOAD=mtime` checks the cached hook-file
 manifest before each outermost parsed command and reloads only when a hook was
 touched. It detects added, removed, renamed, or edited `.lua` files and
