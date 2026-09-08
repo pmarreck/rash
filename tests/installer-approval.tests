@@ -1,0 +1,92 @@
+# Download-to-shell pipeline interception (opt-in hook).
+# Classifier over a set of shapes; ordinary pipes must remain unaffected.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-installer-approval.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir "$tmp/bin" || exit 1
+
+# Local stand-ins so tests never touch the network.
+cat > "$tmp/bin/curl" <<'EOF'
+#!/bin/sh
+# Ignore flags; last non-flag arg is the "URL". Emit a marker-writing script.
+printf '%s\n' 'printf ran-installer > "$INSTALLER_MARKER"'
+EOF
+cat > "$tmp/bin/wget" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'printf ran-installer > "$INSTALLER_MARKER"'
+EOF
+cat > "$tmp/bin/truebash" <<'EOF'
+#!/bin/sh
+# Consumer stand-in named like a shell for absolute-path tests if needed.
+exec bash "$@"
+EOF
+chmod +x "$tmp/bin/curl" "$tmp/bin/wget" "$tmp/bin/truebash"
+
+# Under test the packaged/example hook lives in RASH_HOOK_DIR.
+cp ../hooks/approve_download_pipe.lua "$tmp/approve_download_pipe.lua" || exit 1
+
+export PATH="$tmp/bin:$PATH"
+export INSTALLER_MARKER="$tmp/marker"
+rm -f "$INSTALLER_MARKER"
+
+run_hooked()
+{
+	# $1 = -c script; remaining args become $0,$1,… inside that script.
+	script=$1
+	shift
+	RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile -c "$script" "$@" 2> "$tmp/err"
+	echo $?
+}
+
+# --- must intercept: curl | bash ---
+rm -f "$INSTALLER_MARKER"
+status=$(run_hooked 'curl https://example.test/install.sh | bash')
+err=$(cat "$tmp/err")
+echo "curl|bash denied: $(contains "$err" "download-to-shell")"
+echo "curl|bash status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "curl|bash marker absent: $( [ -f "$INSTALLER_MARKER" ] && echo no || echo yes )"
+
+# --- must intercept: wget | sh ---
+rm -f "$INSTALLER_MARKER"
+status=$(run_hooked 'wget -qO- https://example.test/x.sh | sh')
+err=$(cat "$tmp/err")
+echo "wget|sh denied: $(contains "$err" "download-to-shell")"
+echo "wget|sh marker absent: $( [ -f "$INSTALLER_MARKER" ] && echo no || echo yes )"
+
+# --- must intercept: absolute producer path (literal; parse-stage sees unexpanded words) ---
+rm -f "$INSTALLER_MARKER"
+status=$(run_hooked "$tmp/bin/curl https://example.test/x.sh | bash")
+err=$(cat "$tmp/err")
+echo "abs-curl|bash denied: $(contains "$err" "download-to-shell")"
+echo "abs-curl|bash marker absent: $( [ -f "$INSTALLER_MARKER" ] && echo no || echo yes )"
+
+# --- must NOT intercept: ordinary pipe ---
+rm -f "$INSTALLER_MARKER"
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+	${THIS_SH} --norc --noprofile -c 'printf hello | cat' 2> "$tmp/err")
+status=$?
+err=$(cat "$tmp/err")
+echo "echo|cat unaffected stdout: $out"
+echo "echo|cat status zero: $( [ "$status" -eq 0 ] && echo yes || echo no )"
+echo "echo|cat no download deny: $(contains "$err" "download-to-shell")"
+
+# --- must NOT intercept: curl alone (no pipe to shell) ---
+rm -f "$INSTALLER_MARKER"
+status=$(run_hooked 'curl https://example.test/x.sh > "$INSTALLER_MARKER"')
+# our fake curl ignores URL and prints a script to stdout; with redirect the
+# script text lands in the marker file — that is fine. Just no deny.
+err=$(cat "$tmp/err")
+echo "curl-alone no download deny: $(contains "$err" "download-to-shell")"
+echo "curl-alone status zero: $( [ "$status" -eq 0 ] && echo yes || echo no )"

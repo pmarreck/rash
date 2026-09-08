@@ -1,0 +1,12 @@
+curl|bash denied: yes
+curl|bash status nonzero: yes
+curl|bash marker absent: yes
+wget|sh denied: yes
+wget|sh marker absent: yes
+abs-curl|bash denied: yes
+abs-curl|bash marker absent: yes
+echo|cat unaffected stdout: hello
+echo|cat status zero: yes
+echo|cat no download deny: no
+curl-alone no download deny: no
+curl-alone status zero: yes

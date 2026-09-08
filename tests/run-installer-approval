@@ -1,0 +1,2 @@
+${THIS_SH} ./installer-approval.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} installer-approval.right && rm -f ${BASH_TSTOUT}
