@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
+#include <stdint.h>
 
 #include "maxpath.h"
 
@@ -43,6 +44,8 @@
 #define RASH_UNDO_DEFAULT_MAX_BYTES (256ULL * 1024ULL * 1024ULL)
 #define RASH_UNDO_ERR_MAX 256
 #define RASH_UNDO_PATH_BUF (PATH_MAX + 32)
+#define RASH_INSTALLER_DEFAULT_MAX_BYTES (2ULL * 1024ULL * 1024ULL)
+#define RASH_INSTALLER_ARGV_MAX 64
 
 #if defined (HAVE_LSTAT)
 #  define RASH_LSTAT lstat
@@ -99,21 +102,27 @@ static int before_table_ref = LUA_NOREF;
 static int after_table_ref = LUA_NOREF;
 static int redirect_table_ref = LUA_NOREF;
 static int clobber_table_ref = LUA_NOREF;
+static int download_pipe_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
 static int redirect_count;
 static int clobber_count;
+static int download_pipe_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
 static int *redirect_enforcing;
 static int *clobber_enforcing;
+static int *download_pipe_enforcing;
 static int loading_file_enforcing;
 static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
 static int in_redirect_stage;
+static int in_download_pipe_stage;
+static int download_pipe_handled;
+static int download_pipe_exec_status;
 static int stage_denied;
 static char stage_deny_reason[RASH_DENY_REASON_MAX];
 static int hook_state;
@@ -132,11 +141,21 @@ static int rash_lua_before (lua_State *);
 static int rash_lua_after (lua_State *);
 static int rash_lua_on_redirect (lua_State *);
 static int rash_lua_on_clobber (lua_State *);
+static int rash_lua_on_download_pipe (lua_State *);
+static int rash_lua_approve_bytes (lua_State *);
+static int rash_lua_exec_with_stdin (lua_State *);
 static int rash_lua_snapshot_file (lua_State *);
 static int rash_lua_undo_last (lua_State *);
 static int rash_lua_warn (lua_State *);
 static int rash_lua_deny (lua_State *);
 static int rash_lua_spawn (lua_State *);
+static int rash_download_shape_match (COMMAND *);
+static size_t rash_installer_max_bytes (void);
+static char *rash_word_basename (const char *);
+static int rash_word_list_to_argv (WORD_LIST *, char **, int, int *);
+static void rash_free_argv (char **, int);
+static int rash_capture_argv_stdout (char **, char **, size_t *, size_t, int *);
+static void rash_push_argv_table (lua_State *, char **, int);
 static int rash_command_index (lua_State *);
 static int rash_hook_run (lua_State *);
 static void rash_lua_instruction_limit (lua_State *, lua_Debug *);
@@ -433,6 +452,14 @@ rash_lua_on_clobber (lua_State *L)
   return rash_register_callback (L, clobber_table_ref, &clobber_enforcing, &clobber_count);
 }
 
+static int
+rash_lua_on_download_pipe (lua_State *L)
+{
+  /* Invoked from execute_pipeline after producer stdout is buffered. */
+  return rash_register_callback (L, download_pipe_table_ref,
+				 &download_pipe_enforcing, &download_pipe_count);
+}
+
 static void
 rash_mark_denied (RASH_HOOK_CONTEXT *context, const char *reason)
 {
@@ -467,8 +494,8 @@ rash_lua_deny (lua_State *L)
       return 0;
     }
 
-  /* Expanded-stage before / redirect sensors use stage_denied; parse-stage uses context. */
-  if (in_before_stage || in_redirect_stage)
+  /* Expanded-stage before / redirect / download-pipe sensors use stage_denied. */
+  if (in_before_stage || in_redirect_stage || in_download_pipe_stage)
     {
       if (stage_denied == 0)
 	{
@@ -854,6 +881,12 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "on_redirect");
   lua_pushcfunction (L, rash_lua_on_clobber);
   lua_setfield (L, -2, "on_clobber");
+  lua_pushcfunction (L, rash_lua_on_download_pipe);
+  lua_setfield (L, -2, "on_download_pipe");
+  lua_pushcfunction (L, rash_lua_approve_bytes);
+  lua_setfield (L, -2, "approve_bytes");
+  lua_pushcfunction (L, rash_lua_exec_with_stdin);
+  lua_setfield (L, -2, "exec_with_stdin");
   lua_pushcfunction (L, rash_lua_snapshot_file);
   lua_setfield (L, -2, "snapshot_file");
   lua_pushcfunction (L, rash_lua_undo_last);
@@ -881,6 +914,8 @@ rash_lua_ready (void)
   redirect_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   lua_newtable (L);
   clobber_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  download_pipe_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   rash_lua = L;
   return 1;
 }
@@ -1147,10 +1182,12 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   lua_State *previous_lua;
   int *previous_enforcing, *previous_before_enforcing, *previous_after_enforcing;
   int *previous_redirect_enforcing, *previous_clobber_enforcing;
+  int *previous_download_pipe_enforcing;
   int previous_count, previous_before_count, previous_after_count;
-  int previous_redirect_count, previous_clobber_count;
+  int previous_redirect_count, previous_clobber_count, previous_download_pipe_count;
   int previous_ref, previous_before_ref, previous_after_ref;
-  int previous_redirect_ref, previous_clobber_ref, previous_state;
+  int previous_redirect_ref, previous_clobber_ref, previous_download_pipe_ref;
+  int previous_state;
   int loaded, snapshotted;
   RASH_HOOK_MANIFEST manifest;
 
@@ -1161,24 +1198,27 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   previous_after_ref = after_table_ref;
   previous_redirect_ref = redirect_table_ref;
   previous_clobber_ref = clobber_table_ref;
+  previous_download_pipe_ref = download_pipe_table_ref;
   previous_count = hook_count;
   previous_before_count = before_count;
   previous_after_count = after_count;
   previous_redirect_count = redirect_count;
   previous_clobber_count = clobber_count;
+  previous_download_pipe_count = download_pipe_count;
   previous_enforcing = hook_enforcing;
   previous_before_enforcing = before_enforcing;
   previous_after_enforcing = after_enforcing;
   previous_redirect_enforcing = redirect_enforcing;
   previous_clobber_enforcing = clobber_enforcing;
+  previous_download_pipe_enforcing = download_pipe_enforcing;
   previous_state = hook_state;
   rash_lua = 0;
   hook_table_ref = before_table_ref = after_table_ref = LUA_NOREF;
-  redirect_table_ref = clobber_table_ref = LUA_NOREF;
+  redirect_table_ref = clobber_table_ref = download_pipe_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
-  redirect_count = clobber_count = 0;
+  redirect_count = clobber_count = download_pipe_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
-  redirect_enforcing = clobber_enforcing = 0;
+  redirect_enforcing = clobber_enforcing = download_pipe_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -1189,7 +1229,8 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   if (loaded && snapshotted)
     {
       hook_state = (hook_count > 0 || before_count > 0 || after_count > 0
-		    || redirect_count > 0 || clobber_count > 0) ? 1 : -1;
+		    || redirect_count > 0 || clobber_count > 0
+		    || download_pipe_count > 0) ? 1 : -1;
       rash_hook_save_configuration (directory, allow_unowned, enforce_unowned);
       rash_hook_manifest_replace (&manifest);
       free (previous_enforcing);
@@ -1197,6 +1238,7 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
       free (previous_after_enforcing);
       free (previous_redirect_enforcing);
       free (previous_clobber_enforcing);
+      free (previous_download_pipe_enforcing);
       if (previous_lua)
 	{
 	  if (hook_execution_depth)
@@ -1214,22 +1256,26 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   free (after_enforcing);
   free (redirect_enforcing);
   free (clobber_enforcing);
+  free (download_pipe_enforcing);
   rash_lua = previous_lua;
   hook_table_ref = previous_ref;
   before_table_ref = previous_before_ref;
   after_table_ref = previous_after_ref;
   redirect_table_ref = previous_redirect_ref;
   clobber_table_ref = previous_clobber_ref;
+  download_pipe_table_ref = previous_download_pipe_ref;
   hook_count = previous_count;
   before_count = previous_before_count;
   after_count = previous_after_count;
   redirect_count = previous_redirect_count;
   clobber_count = previous_clobber_count;
+  download_pipe_count = previous_download_pipe_count;
   hook_enforcing = previous_enforcing;
   before_enforcing = previous_before_enforcing;
   after_enforcing = previous_after_enforcing;
   redirect_enforcing = previous_redirect_enforcing;
   clobber_enforcing = previous_clobber_enforcing;
+  download_pipe_enforcing = previous_download_pipe_enforcing;
   hook_state = previous_lua ? previous_state : -1;
   rash_hook_save_configuration (directory, allow_unowned, enforce_unowned);
   if (snapshotted)
@@ -2148,6 +2194,528 @@ rash_hooks_on_redirect (const char *path, enum r_instruction ri, int redirector_
   in_redirect_stage = 0;
   current_hook_enforcing = 0;
   return stage_denied ? 1 : 0;
+}
+
+static size_t
+rash_installer_max_bytes (void)
+{
+  const char *raw;
+  char *end;
+  unsigned long long value;
+
+  raw = getenv ("RASH_INSTALLER_MAX_BYTES");
+  if (raw == 0 || raw[0] == '\0')
+    return (size_t)RASH_INSTALLER_DEFAULT_MAX_BYTES;
+  errno = 0;
+  value = strtoull (raw, &end, 10);
+  if (errno != 0 || end == raw || *end != '\0' || value == 0)
+    return (size_t)RASH_INSTALLER_DEFAULT_MAX_BYTES;
+  if (value > (unsigned long long)SIZE_MAX)
+    return (size_t)SIZE_MAX;
+  return (size_t)value;
+}
+
+static char *
+rash_word_basename (const char *word)
+{
+  const char *slash;
+
+  if (word == 0 || word[0] == '\0')
+    return 0;
+  slash = strrchr (word, '/');
+  return savestring (slash ? slash + 1 : word);
+}
+
+static int
+rash_is_download_producer_name (const char *base)
+{
+  return base && (strcmp (base, "curl") == 0 || strcmp (base, "wget") == 0);
+}
+
+static int
+rash_is_download_consumer_name (const char *base)
+{
+  return base && (strcmp (base, "bash") == 0 || strcmp (base, "sh") == 0
+		  || strcmp (base, "rash") == 0);
+}
+
+static int
+rash_download_shape_match (COMMAND *command)
+{
+  COMMAND *left, *right;
+  WORD_LIST *lwords, *rwords;
+  char *lbase, *rbase;
+  int match;
+
+  if (command == 0 || command->type != cm_connection)
+    return 0;
+  if (command->value.Connection == 0
+      || command->value.Connection->connector != '|')
+    return 0;
+  left = command->value.Connection->first;
+  right = command->value.Connection->second;
+  if (left == 0 || right == 0 || left->type != cm_simple || right->type != cm_simple)
+    return 0;
+  if (left->value.Simple == 0 || right->value.Simple == 0)
+    return 0;
+  lwords = left->value.Simple->words;
+  rwords = right->value.Simple->words;
+  if (lwords == 0 || rwords == 0 || lwords->word == 0 || rwords->word == 0)
+    return 0;
+  lbase = rash_word_basename (lwords->word->word);
+  rbase = rash_word_basename (rwords->word->word);
+  match = rash_is_download_producer_name (lbase) && rash_is_download_consumer_name (rbase);
+  free (lbase);
+  free (rbase);
+  return match;
+}
+
+static int
+rash_word_list_to_argv (WORD_LIST *list, char **argv, int max, int *argc_out)
+{
+  int argc;
+
+  argc = 0;
+  while (list && argc < max)
+    {
+      if (list->word == 0 || list->word->word == 0)
+	{
+	  rash_free_argv (argv, argc);
+	  return -1;
+	}
+      argv[argc++] = savestring (list->word->word);
+      list = list->next;
+    }
+  if (list)
+    {
+      rash_free_argv (argv, argc);
+      return -1;
+    }
+  argv[argc] = 0;
+  *argc_out = argc;
+  return 0;
+}
+
+static void
+rash_free_argv (char **argv, int argc)
+{
+  int i;
+
+  for (i = 0; i < argc; i++)
+    free (argv[i]);
+}
+
+static void
+rash_push_argv_table (lua_State *L, char **argv, int argc)
+{
+  int i;
+
+  lua_createtable (L, argc, 0);
+  for (i = 0; i < argc; i++)
+    {
+      lua_pushstring (L, argv[i]);
+      lua_rawseti (L, -2, i + 1);
+    }
+}
+
+static int
+rash_capture_argv_stdout (char **argv, char **out_buf, size_t *out_len, size_t cap,
+			  int *status_out)
+{
+  int out_pipe[2], status;
+  pid_t child;
+  sigset_t block_set, prev_set;
+  char *buf;
+  size_t len;
+  ssize_t got;
+  char scratch[8192];
+
+  *out_buf = 0;
+  *out_len = 0;
+  *status_out = EXECUTION_FAILURE;
+  if (pipe (out_pipe) < 0)
+    return -1;
+
+  sigemptyset (&block_set);
+  sigaddset (&block_set, SIGCHLD);
+  sigprocmask (SIG_BLOCK, &block_set, &prev_set);
+
+  child = fork ();
+  if (child < 0)
+    {
+      sigprocmask (SIG_SETMASK, &prev_set, 0);
+      close (out_pipe[0]);
+      close (out_pipe[1]);
+      return -1;
+    }
+  if (child == 0)
+    {
+      int maxfd, fd;
+
+      sigprocmask (SIG_SETMASK, &prev_set, 0);
+      close (out_pipe[0]);
+      if (dup2 (out_pipe[1], STDOUT_FILENO) < 0)
+	_exit (127);
+      close (out_pipe[1]);
+      /* Producer stderr stays on the parent's stderr for visibility. */
+      maxfd = sysconf (_SC_OPEN_MAX);
+      if (maxfd < 0)
+	maxfd = 256;
+      for (fd = 3; fd < maxfd; fd++)
+	close (fd);
+      execvp (argv[0], argv);
+      _exit (127);
+    }
+
+  close (out_pipe[1]);
+  buf = (char *)xmalloc (cap + 1);
+  len = 0;
+  while ((got = read (out_pipe[0], scratch, sizeof (scratch))) > 0)
+    {
+      if (len + (size_t)got > cap)
+	{
+	  close (out_pipe[0]);
+	  kill (child, SIGKILL);
+	  waitpid (child, &status, 0);
+	  sigprocmask (SIG_SETMASK, &prev_set, 0);
+	  free (buf);
+	  return -2; /* oversize */
+	}
+      memcpy (buf + len, scratch, (size_t)got);
+      len += (size_t)got;
+    }
+  close (out_pipe[0]);
+  if (waitpid (child, &status, 0) < 0)
+    {
+      sigprocmask (SIG_SETMASK, &prev_set, 0);
+      free (buf);
+      return -1;
+    }
+  sigprocmask (SIG_SETMASK, &prev_set, 0);
+  buf[len] = '\0';
+  *out_buf = buf;
+  *out_len = len;
+  if (WIFEXITED (status))
+    *status_out = WEXITSTATUS (status);
+  else
+    *status_out = EXECUTION_FAILURE;
+  return 0;
+}
+
+static int
+rash_lua_approve_bytes (lua_State *L)
+{
+  size_t length, i;
+  const char *bytes, *override;
+  int tty_fd, approved;
+  char response[8];
+  ssize_t n;
+
+  bytes = luaL_checklstring (L, 1, &length);
+  override = getenv ("RASH_APPROVE_BYTES");
+  if (override && strcmp (override, "always") == 0)
+    {
+      rash_hook_warning ("RASH_APPROVE_BYTES=always (test/dev only): auto-approving buffered script", 0);
+      lua_pushboolean (L, 1);
+      return 1;
+    }
+  if (override && strcmp (override, "never") == 0)
+    {
+      rash_hook_warning ("RASH_APPROVE_BYTES=never (test/dev only): auto-rejecting buffered script", 0);
+      lua_pushboolean (L, 0);
+      return 1;
+    }
+
+  fprintf (stderr, "rash: download-to-shell script (%zu bytes):\n", length);
+  fprintf (stderr, "---- begin reviewed bytes ----\n");
+  for (i = 0; i < length; i++)
+    {
+      unsigned char c;
+
+      c = (unsigned char)bytes[i];
+      if (c == '\n' || c == '\t' || (c >= 32 && c < 127))
+	fputc (c, stderr);
+      else if (c == 0x1b)
+	fputs ("^[", stderr);
+      else
+	fputc ('?', stderr);
+    }
+  if (length == 0 || bytes[length - 1] != '\n')
+    fputc ('\n', stderr);
+  fprintf (stderr, "---- end reviewed bytes ----\n");
+
+  tty_fd = open ("/dev/tty", O_RDWR);
+  if (tty_fd < 0)
+    {
+      fprintf (stderr, "rash: no controlling tty; refusing download-to-shell script\n");
+      lua_pushboolean (L, 0);
+      return 1;
+    }
+  if (write (tty_fd, "rash: run this script? [y/N] ", 29) < 0)
+    {
+      close (tty_fd);
+      lua_pushboolean (L, 0);
+      return 1;
+    }
+  n = read (tty_fd, response, sizeof (response) - 1);
+  close (tty_fd);
+  approved = 0;
+  if (n > 0)
+    {
+      response[n] = '\0';
+      if (response[0] == 'y' || response[0] == 'Y')
+	approved = 1;
+    }
+  lua_pushboolean (L, approved);
+  return 1;
+}
+
+static int
+rash_lua_exec_with_stdin (lua_State *L)
+{
+  char *argv[RASH_INSTALLER_ARGV_MAX + 1];
+  const char *bytes;
+  size_t length, argc, i;
+  int in_pipe[2], status;
+  pid_t child;
+  sigset_t block_set, prev_set;
+  ssize_t wrote;
+
+  luaL_checktype (L, 1, LUA_TTABLE);
+  bytes = luaL_checklstring (L, 2, &length);
+  argc = lua_objlen (L, 1);
+  if (argc == 0 || argc > RASH_INSTALLER_ARGV_MAX)
+    return luaL_error (L, "rash.exec_with_stdin expects 1..%d argv entries",
+		       RASH_INSTALLER_ARGV_MAX);
+
+  for (i = 0; i < argc; i++)
+    {
+      const char *arg;
+
+      lua_rawgeti (L, 1, (int)i + 1);
+      arg = luaL_checkstring (L, -1);
+      argv[i] = savestring (arg);
+      lua_pop (L, 1);
+    }
+  argv[argc] = 0;
+
+  if (pipe (in_pipe) < 0)
+    {
+      rash_free_argv (argv, (int)argc);
+      return luaL_error (L, "rash.exec_with_stdin pipe failed: %s", strerror (errno));
+    }
+
+  sigemptyset (&block_set);
+  sigaddset (&block_set, SIGCHLD);
+  sigprocmask (SIG_BLOCK, &block_set, &prev_set);
+
+  child = fork ();
+  if (child < 0)
+    {
+      sigprocmask (SIG_SETMASK, &prev_set, 0);
+      close (in_pipe[0]);
+      close (in_pipe[1]);
+      rash_free_argv (argv, (int)argc);
+      return luaL_error (L, "rash.exec_with_stdin fork failed: %s", strerror (errno));
+    }
+  if (child == 0)
+    {
+      int maxfd, fd;
+
+      sigprocmask (SIG_SETMASK, &prev_set, 0);
+      close (in_pipe[1]);
+      if (dup2 (in_pipe[0], STDIN_FILENO) < 0)
+	_exit (127);
+      close (in_pipe[0]);
+      maxfd = sysconf (_SC_OPEN_MAX);
+      if (maxfd < 0)
+	maxfd = 256;
+      for (fd = 3; fd < maxfd; fd++)
+	close (fd);
+      execvp (argv[0], argv);
+      _exit (127);
+    }
+
+  rash_free_argv (argv, (int)argc);
+  close (in_pipe[0]);
+  wrote = 0;
+  while ((size_t)wrote < length)
+    {
+      ssize_t n;
+
+      n = write (in_pipe[1], bytes + wrote, length - (size_t)wrote);
+      if (n < 0)
+	{
+	  if (errno == EINTR)
+	    continue;
+	  break;
+	}
+      wrote += n;
+    }
+  close (in_pipe[1]);
+  if (waitpid (child, &status, 0) < 0)
+    {
+      sigprocmask (SIG_SETMASK, &prev_set, 0);
+      return luaL_error (L, "rash.exec_with_stdin waitpid failed: %s", strerror (errno));
+    }
+  sigprocmask (SIG_SETMASK, &prev_set, 0);
+
+  download_pipe_handled = 1;
+  if (WIFEXITED (status))
+    download_pipe_exec_status = WEXITSTATUS (status);
+  else
+    download_pipe_exec_status = EXECUTION_FAILURE;
+  lua_pushinteger (L, download_pipe_exec_status);
+  return 1;
+}
+
+int
+rash_hooks_try_download_pipe (COMMAND *command, int asynchronous, int pipe_in,
+			      int pipe_out, struct fd_bitmap *fds_to_close,
+			      int *result)
+{
+  COMMAND *left, *right;
+  char *producer_argv[RASH_INSTALLER_ARGV_MAX + 1];
+  char *consumer_argv[RASH_INSTALLER_ARGV_MAX + 1];
+  char *buffer;
+  size_t buffer_len, cap;
+  int producer_argc, consumer_argc, producer_status, rc, i, base, status;
+
+  (void)fds_to_close;
+  if (result)
+    *result = EXECUTION_FAILURE;
+  if (asynchronous || pipe_in != NO_PIPE || pipe_out != NO_PIPE)
+    return 0;
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || download_pipe_count == 0 || rash_lua == 0)
+    return 0;
+  if (rash_download_shape_match (command) == 0)
+    return 0;
+
+  left = command->value.Connection->first;
+  right = command->value.Connection->second;
+  if (rash_word_list_to_argv (left->value.Simple->words, producer_argv,
+			      RASH_INSTALLER_ARGV_MAX, &producer_argc) < 0)
+    {
+      fprintf (stderr, "rash: download-to-shell: cannot build producer argv\n");
+      if (result)
+	*result = EXECUTION_FAILURE;
+      return 1;
+    }
+  if (rash_word_list_to_argv (right->value.Simple->words, consumer_argv,
+			      RASH_INSTALLER_ARGV_MAX, &consumer_argc) < 0)
+    {
+      rash_free_argv (producer_argv, producer_argc);
+      fprintf (stderr, "rash: download-to-shell: cannot build consumer argv\n");
+      if (result)
+	*result = EXECUTION_FAILURE;
+      return 1;
+    }
+
+  cap = rash_installer_max_bytes ();
+  rc = rash_capture_argv_stdout (producer_argv, &buffer, &buffer_len, cap,
+				 &producer_status);
+  if (rc == -2)
+    {
+      rash_free_argv (producer_argv, producer_argc);
+      rash_free_argv (consumer_argv, consumer_argc);
+      fprintf (stderr, "rash: download-to-shell: producer stdout exceeds RASH_INSTALLER_MAX_BYTES\n");
+      if (result)
+	*result = EXECUTION_FAILURE;
+      return 1;
+    }
+  if (rc < 0)
+    {
+      rash_free_argv (producer_argv, producer_argc);
+      rash_free_argv (consumer_argv, consumer_argc);
+      fprintf (stderr, "rash: download-to-shell: producer capture failed\n");
+      if (result)
+	*result = EXECUTION_FAILURE;
+      return 1;
+    }
+  if (producer_status != 0)
+    {
+      free (buffer);
+      rash_free_argv (producer_argv, producer_argc);
+      rash_free_argv (consumer_argv, consumer_argc);
+      fprintf (stderr, "rash: download-to-shell: producer exited %d\n", producer_status);
+      if (result)
+	*result = producer_status ? producer_status : EXECUTION_FAILURE;
+      return 1;
+    }
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  download_pipe_handled = 0;
+  download_pipe_exec_status = EXECUTION_FAILURE;
+  in_download_pipe_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= download_pipe_count; i++)
+    {
+      current_hook_enforcing = download_pipe_enforcing && download_pipe_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, download_pipe_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      lua_newtable (rash_lua);
+      lua_pushlstring (rash_lua, buffer, buffer_len);
+      lua_setfield (rash_lua, -2, "bytes");
+      rash_push_argv_table (rash_lua, producer_argv, producer_argc);
+      lua_setfield (rash_lua, -2, "producer_argv");
+      rash_push_argv_table (rash_lua, consumer_argv, consumer_argc);
+      lua_setfield (rash_lua, -2, "consumer_argv");
+      status = rash_lua_pcall (rash_lua, 1, 0);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing on_download_pipe failed; denying: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing on_download_pipe failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory on_download_pipe failed; continuing deny: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	    }
+	}
+      if (stage_denied || download_pipe_handled)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_download_pipe_stage = 0;
+  current_hook_enforcing = 0;
+  free (buffer);
+  rash_free_argv (producer_argv, producer_argc);
+  rash_free_argv (consumer_argv, consumer_argc);
+
+  if (stage_denied)
+    {
+      if (result)
+	*result = EXECUTION_FAILURE;
+      return 1;
+    }
+  if (download_pipe_handled == 0)
+    {
+      fprintf (stderr, "rash: download-to-shell: handler did not exec_with_stdin; refusing fall-through\n");
+      if (result)
+	*result = EXECUTION_FAILURE;
+      return 1;
+    }
+  if (result)
+    *result = download_pipe_exec_status;
+  return 1;
 }
 
 int

@@ -83,6 +83,27 @@ and the resolved path already exists as a regular file. Creating a new file
 with `>` is `exists=false` / `will_clobber=false`; snapshot that case too if
 you want undo to **unlink**.
 
+### Download→shell installer approval (factoring B)
+
+Thin seam in `execute_pipeline` for `curl`/`wget` → `bash`/`sh`/`rash`
+(simple|simple only). Producer stdout is buffered (default 2 MiB via
+`RASH_INSTALLER_MAX_BYTES`); consumer is not started until Lua finishes:
+
+```lua
+rash.on_download_pipe(function(ctx)
+  -- ctx.bytes, ctx.producer_argv, ctx.consumer_argv
+  if not rash.approve_bytes(ctx.bytes) then
+    rash.deny("rejected")
+    return
+  end
+  rash.exec_with_stdin(ctx.consumer_argv, ctx.bytes)  -- exact reviewed bytes
+end)
+```
+
+`approve_bytes` shows a sanitized review on stderr and prompts `/dev/tty`
+(Y/n). No TTY → false. Test/dev only: `RASH_APPROVE_BYTES=always|never`.
+Packaged opt-in: `approve_download_pipe.lua`. See `INSTALLER_APPROVAL.md`.
+
 Undo storage:
 
 | Variable | Default |

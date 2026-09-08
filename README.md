@@ -38,9 +38,10 @@ already substituted at parse time; variables/globs/command-subs resolved).
 the command is not already in a pipeline — capped `stdout`/`stderr` captures.
 The expanded stage can see secrets; prefer structure-only policy at parse stage.
 
-Opt-in `approve_download_pipe.lua` fail-closes recognized `curl`/`wget` →
-`bash`/`sh`/`rash` pipelines so a consumer shell never sees streamed installer
-bytes until review/exact-byte exec ports land (`INSTALLER_APPROVAL.md`).
+Opt-in `approve_download_pipe.lua` intercepts `curl`/`wget` → `bash`/`sh`/`rash`
+pipelines: the producer is buffered, `rash.approve_bytes` reviews on a tty, and
+`rash.exec_with_stdin` runs the consumer on those exact bytes
+(`INSTALLER_APPROVAL.md`).
 
 Redirect sensors fire after path resolve and before `open(2)`:
 `rash.on_redirect` (all path-bearing redirects) and `rash.on_clobber` (only

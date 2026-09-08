@@ -2644,9 +2644,18 @@ execute_pipeline (COMMAND *command, int asynchronous, int pipe_in, int pipe_out,
 {
   int prev, fildes[2], new_bitmap_size, dummyfd, ignore_return, invert, exec_result;
   int lstdin, lastpipe_flag, lastpipe_jid, old_frozen, stdin_valid;
+  int download_intercept, download_result;
   COMMAND *cmd;
   struct fd_bitmap *fd_bitmap;
   pid_t lastpid;
+
+  /* Opt-in download→shell seam: buffer producer, Lua approve/exec ports. */
+  download_intercept = rash_hooks_try_download_pipe (command, asynchronous,
+						     pipe_in, pipe_out,
+						     fds_to_close,
+						     &download_result);
+  if (download_intercept)
+    return (download_result);
 
 #if defined (JOB_CONTROL)
   sigset_t set, oset;

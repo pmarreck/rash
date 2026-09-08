@@ -61,33 +61,29 @@ Also match absolute paths whose basename is in that set
 as a known gap. Unmatched forms for v1: `python -`, `node`, `powershell`,
 `curl | tee file | bash`, `bash -c "$(curl …)"`.
 
-## Architecture sketch
+## Architecture (Peter 2026-09-08: factoring **B**)
+
+Thin **pipeline seam** + callable **ports**. Business logic stays in Lua.
 
 ```
-parse-stage rash.hook
-  └─ recognize download|shell connection
-       └─ do NOT call run()
-            └─ C: run producer, capture stdout (cap)
-                 └─ C: sanitize + show on stderr; prompt /dev/tty
-                      ├─ reject/cancel → deny, no consumer
-                      └─ approve → exec consumer argv with stdin = buffer
+execute_pipeline (simple|simple download shape, handlers registered)
+  └─ run producer, buffer stdout (cap/time) — consumer not started
+       └─ rash.on_download_pipe(ctx)   -- ctx.bytes, words, …
+            ├─ rash.approve_bytes(bytes, meta?) → boolean (tty Y/n)
+            └─ rash.exec_with_stdin(consumer_argv, bytes) → status
+                 (marks handled; seam skips normal pipe resume)
 ```
 
-Business logic (which shapes, messaging) stays in Lua.
-C ports stay inert: capture producer, review UI, exec-with-stdin-bytes.
+### C surface
 
-### Proposed C ports
-
-| Port | Role |
+| Piece | Role |
 |---|---|
-| `rash.capture_command(argv, opts)` | run argv; return `{status,stdout,stderr}` with hard byte cap (larger than today's 64KiB spawn cap, or a dedicated installer cap) |
-| `rash.approve_bytes(bytes, meta)` | print sanitized review; Y/n on `/dev/tty`; return boolean |
-| `rash.exec_with_stdin(argv, bytes)` | fork/exec argv with stdin fed from `bytes`; never re-enters hooks |
+| Seam in `execute_pipeline` | Buffer producer for matching shapes when handlers exist; invoke Lua; honor handled/deny |
+| `rash.on_download_pipe(fn)` | Register handler |
+| `rash.approve_bytes(bytes[, meta])` | Sanitize + show on stderr; Y/n on `/dev/tty`; non-TTY → false. Test/dev: `RASH_APPROVE_BYTES=always\|never` |
+| `rash.exec_with_stdin(argv, bytes)` | fork/exec with stdin = exact bytes; no hook re-entry |
 
-Pipe-buffer alternative (preferred for exactness when the producer is not a
-pure URL fetch): intercept in `execute_pipeline` when a hook declares the
-outer connection as a download-pipe. Same review/exec tail. Harder; better
-fidelity for `curl -H Auth:…`.
+Defaults: **2 MiB** buffer (`RASH_INSTALLER_MAX_BYTES`), **30s** producer wait (`RASH_INSTALLER_TIMEOUT_MS` reserved / best-effort).
 
 ## Unresolved policy choices (need Peter)
 

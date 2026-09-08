@@ -1,10 +1,11 @@
-curl|bash denied: yes
-curl|bash status nonzero: yes
-curl|bash marker absent: yes
-wget|sh denied: yes
-wget|sh marker absent: yes
-abs-curl|bash denied: yes
-abs-curl|bash marker absent: yes
+curl|bash approve status zero: yes
+curl|bash marker written: yes
+curl|bash exact payload: yes
+curl|bash reject denied: yes
+curl|bash reject status nonzero: yes
+curl|bash reject marker absent: yes
+wget|sh approve marker: yes
+abs-curl|bash approve marker: yes
 echo|cat unaffected stdout: hello
 echo|cat status zero: yes
 echo|cat no download deny: no

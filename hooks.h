@@ -17,6 +17,11 @@ extern void rash_hooks_after_simple (WORD_LIST *words, int status,
 				    const char *captured_stderr, size_t stderr_len);
 /* Before open(2) for a path-bearing redirect. Non-zero → RASH_DENIED_REDIRECT. */
 extern int rash_hooks_on_redirect (const char *path, enum r_instruction ri, int redirector_fd);
+/* Download→shell pipe seam: 1 if intercepted (*result set), 0 to fall through. */
+extern int rash_hooks_try_download_pipe (COMMAND *command, int asynchronous,
+					 int pipe_in, int pipe_out,
+					 struct fd_bitmap *fds_to_close,
+					 int *result);
 extern int rash_hooks_want_stdio_capture (void);
 extern void rash_hooks_command_begin (void);
 extern void rash_hooks_command_end (void);
