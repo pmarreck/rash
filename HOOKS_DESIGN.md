@@ -5,6 +5,9 @@ described as one. It is a structural guard against *mistakes* — which is the
 dominant failure mode when an LLM drives a shell, and the reason this is worth
 building.
 
+**Seam catalog** (what Lua receives / must return at each point, plus candidates):
+see `HOOK_SEAMS.md`.
+
 ## Implemented
 
 `RASH_HOOK_DIR` selects Lua hook files. A regular root-owned file that is not

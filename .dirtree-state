@@ -5,6 +5,7 @@ annotate=[
 	BUGFIX_REPRO_REPORTS/2026-08-05-sigchld-lost-update-drain-window.md = Class-3 SIGCHLD report: handler-queued firings zeroed by drain read-then-clear; BLOCK_CHILD fix
 	CODE_REVIEW.md = 13-dimension evidence-backed code review and remediation order
 	HOOKS_DESIGN.md = Lifecycle hook trust boundaries, reload behavior, and AST integration design.
+	HOOK_SEAMS.md = Catalog of hook seams: Lua recv/return contracts + candidates (incl. capture-FD)
 	INSTALLER_APPROVAL.md = Design: buffer, review, exact-byte exec for installer pipes
 	MUTATION_SAFETY_OPTIONS.md = Evidence-backed Rash mutation-interception and COW rollback architecture options.
 	Makefile.in = Autotools Makefile template, including the README.md installation manifest.
