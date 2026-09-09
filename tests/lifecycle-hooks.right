@@ -1,0 +1,16 @@
+before_pipeline expanded url: yes
+before_pipeline deny status nonzero: yes
+before_pipeline deny reason: yes
+before_pipeline deny no stdout: yes
+on_builtin deny eval: yes
+on_builtin eval blocked HI: no
+on_builtin after still runs: yes
+on_function deny: yes
+on_function blocked BOOM: no
+on_function after: yes
+on_exec deny: yes
+on_exec blocked EVIL: no
+on_exec after: yes
+stdio_bundle has rc: yes
+stdio_bundle has out: yes
+stdio_bundle has err: yes

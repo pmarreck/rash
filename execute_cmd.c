@@ -2649,6 +2649,10 @@ execute_pipeline (COMMAND *command, int asynchronous, int pipe_in, int pipe_out,
   struct fd_bitmap *fd_bitmap;
   pid_t lastpid;
 
+  /* Expanded pipeline argv before any fork; deny aborts the whole pipe. */
+  if (rash_hooks_before_pipeline (command) != 0)
+    return (EXECUTION_FAILURE);
+
   /* Opt-in download→shell seam: buffer producer, Lua approve/exec ports. */
   download_intercept = rash_hooks_try_download_pipe (command, asynchronous,
 						     pipe_in, pipe_out,
@@ -4696,11 +4700,11 @@ execute_simple_command (SIMPLE_COM *simple_command, int pipe_in, int pipe_out, i
 
   begin_unwind_frame ("simple-command");
 
-  /* Capture stdout/stderr for after-hooks only when this simple command is not
-     already part of a pipeline/async fork (those FDs belong to the pipeline). */
+  /* Capture stdout/stderr for after-hooks / on_stdio_bundle only when this
+     simple command is not already part of a pipeline/async fork. */
   capture_stdio = already_forked == 0 && async == 0 &&
 		  pipe_in == NO_PIPE && pipe_out == NO_PIPE &&
-		  rash_hooks_want_stdio_capture ();
+		  (rash_hooks_want_stdio_capture () || rash_hooks_want_stdio_bundle ());
   if (capture_stdio)
     {
       const char *tmpdir;
@@ -5103,8 +5107,12 @@ execute_from_filesystem:
 	}
     }
   if (already_forked == 0)
-    rash_hooks_after_simple (words, result, cap_out_buf, cap_out_len,
-			     cap_err_buf, cap_err_len);
+    {
+      rash_hooks_after_simple (words, result, cap_out_buf, cap_out_len,
+			       cap_err_buf, cap_err_len);
+      rash_hooks_stdio_bundle (words, result, cap_out_buf, cap_out_len,
+			       cap_err_buf, cap_err_len);
+    }
   free (cap_out_buf);
   free (cap_err_buf);
   dispose_words (words);
@@ -5154,6 +5162,9 @@ execute_builtin (sh_builtin_func_t *builtin, WORD_LIST *words, int flags, int su
 
   error_trap = 0;
   should_keep = 0;
+
+  if (rash_hooks_on_builtin (words) != 0)
+    return (EXECUTION_FAILURE);
 
   /* The eval builtin calls parse_and_execute, which does not know about
      the setting of flags, and always calls the execution functions with
@@ -5369,6 +5380,9 @@ execute_function (SHELL_VAR *var, WORD_LIST *words, int flags, struct fd_bitmap 
       funcnest = 0;	/* XXX - should we reset it somewhere else? */
       jump_to_top_level (DISCARD);
     }
+
+  if (rash_hooks_on_function (var->name, words) != 0)
+    return (EXECUTION_FAILURE);
 
 #if defined (ARRAY_VARS)
   GET_ARRAY_FROM_VAR ("FUNCNAME", funcname_v, funcname_a);
@@ -6293,6 +6307,9 @@ shell_execve (char *command, char **args, char **env)
   int i, fd, sample_len;
   char sample[HASH_BANG_BUFSIZ];
   size_t larray;
+
+  if (rash_hooks_on_exec (command, args) != 0)
+    return (last_command_exit_value ? last_command_exit_value : EXECUTION_FAILURE);
 
   SETOSTYPE (0);		/* Some systems use for USG/POSIX semantics */
   execve (command, args, env);

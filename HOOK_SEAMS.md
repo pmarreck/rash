@@ -90,87 +90,80 @@ end)
 
 ---
 
-## Candidate seams (not implemented)
+## Implemented (lifecycle batch, 2026-09-09)
 
-Each row: **hook name (proposed)**, location, what Lua would get, return contract, why it might matter.
+See `tests/lifecycle-hooks.*` for acceptance.
 
-### A. `rash.before_pipeline` — expanded argv, pipe not started
-
-| | |
-|---|---|
-| **Where** | Parent, top of `execute_pipeline` (beside download-pipe), **before** forking stages |
-| **Receives** | Expanded copies of left/right argv (and maybe full connection shape); optional redirect summaries |
-| **Must / may** | `allow` / `deny` / or “hand off to download-pipe”. Deny aborts whole pipeline. |
-| **Why** | Closes `"$CURL" \| bash` gap; allowlists on real URLs |
-| **Cost** | Expanding in the parent early: must not apply assignment words to parent; command-subs on the right run earlier than stock Bash |
-
-### B. `rash.on_exec` — final execve identity
+### 6. `rash.before_pipeline(fn)` — expanded argv, pipe not started
 
 | | |
 |---|---|
-| **Where** | `shell_execve` / just before `execve` in `execute_disk_command` child |
-| **Receives** | Resolved pathname, argv, selected env keys, optional content hash |
-| **Must / may** | `allow` / `deny` (deny → exit 126/127-class). No mutation of argv unless explicitly designed. |
-| **Why** | Safety C content-hash allowlist; stops path-only lies |
-| **Cost** | Runs in child after fork for pipes; hashing cost; interpreter/`ld.so` policy still separate |
+| **Where** | Parent, top of `execute_pipeline`, **before** download-pipe and forking |
+| **Receives** | `ctx.left_words`, `ctx.right_words` (expanded), `ctx.connector` |
+| **Must / may** | May `rash.deny` → abort whole pipeline |
+| **Why** | Closes `"$CURL" \| bash` gap |
 
-### C. `rash.on_builtin` / `rash.on_function`
+### 7. `rash.on_exec(fn)` — final execve identity
+
+| | |
+|---|---|
+| **Where** | `shell_execve`, before `execve` |
+| **Receives** | `ctx.path`, `ctx.words` (argv) |
+| **Must / may** | May `rash.deny` → no execve, failure exit |
+| **Why** | Path/bytes allowlists (Safety C foundation) |
+
+### 8. `rash.on_builtin(fn)` / `rash.on_function(fn)`
 
 | | |
 |---|---|
 | **Where** | `execute_builtin` / `execute_function` entry |
-| **Receives** | Builtin name or function name; expanded `words` |
-| **Must / may** | `allow` / `deny`; optional wrap |
-| **Why** | `eval`, `source`, `exec`, `cd` to sensitive paths; function shadowing |
-| **Cost** | High call volume; keep predicates cheap |
+| **Receives** | `ctx.name`, `ctx.words` |
+| **Must / may** | May `rash.deny` → skip body |
+| **Why** | `eval` / `source` / dangerous functions |
 
-### D. `rash.before_simple` for pipe children (opt-in)
-
-| | |
-|---|---|
-| **Where** | Same as today’s before, but also when `already_forked` / `SUBSHELL_PIPE` |
-| **Receives** | Expanded words for **that** stage only |
-| **Must / may** | deny that stage (awkward mid-pipe) |
-| **Why** | Per-stage expanded policy inside pipelines |
-| **Cost** | Denial mid-pipe is hard to reason about; usually worse than `before_pipeline` |
-
-### E. `rash.on_stdio_bundle` — capture triple → transform → FD  
-*(Peter 2026-09-09: replace hairy `capture` )*
-
-**Problem.** `~/dotfiles/bin/src/capture.bash` juggles nested command substitutions and FDs 3/4 to get `out` / `err` / `rc` into caller locals, optionally through `printable-binary`. It works; it is hard to maintain.
-
-**Idea.** When a command (or group) is “connected” to a designated FD, Rash:
-
-1. Runs it with stdout/stderr captured (and records status), like a stronger `after`.
-2. Invokes Lua with the triple (and argv).
-3. Lua builds structured JSON (binary fields via printable-binary encoding).
-4. C writes that payload to the designated FD (and/or suppresses the original stdio).
+### 9. `rash.on_stdio_bundle(fn)` — capture triple → FD  
+*(replaces hairy `capture.bash`)*
 
 | | |
 |---|---|
-| **Where** | Generalization of today’s after-capture path in `execute_simple_command`, or a wrapper around a simple/group when a **watch FD** is open / a magic redirect is present |
-| **Trigger options** (pick later) | (1) env `RASH_CAPTURE_FD=9`; (2) open FD N marked at session start; (3) redirect sugar e.g. `cmd 9>@rash-json`; (4) Lua registration `rash.on_stdio_bundle(fd, fn)` |
-| **Receives** | `ctx.stdout`, `ctx.stderr`, `ctx.status`, `ctx.words` / `ctx.line`; maybe `ctx.fd` (destination); caps + truncation flags |
-| **Must / may** | Return a string (JSON) **or** call `rash.write_fd(fd, bytes)`. If return string, C writes it to the watch FD. Encoding of NULs/binary is Lua’s job (printable-binary); C must pass raw bytes with `lua_pushlstring` / write full length. |
-| **Why** | `local out err rc; capture cmd` → `cmd` with FD convention + `jq` / read JSON from FD |
-| **Cost** | Caps (default larger than 64 KiB?); pipelines (capture whole pipeline vs forbid); interaction with existing `after`; must not forge a bypass by “capture FD means skip policy” |
-
-Sketch (illustrative, not shipped):
+| **Where** | After simple-command (same capture constraints as `after`) |
+| **Trigger** | Handlers registered **and** `RASH_CAPTURE_FD=<n>` |
+| **Receives** | `ctx.stdout`, `ctx.stderr`, `ctx.status`, `ctx.words` |
+| **Must / may** | **Return a string**; C writes it to FD `n` |
+| **Why** | Structured out/err/rc without FD juggling |
 
 ```lua
 rash.on_stdio_bundle(function(ctx)
-  -- ctx.stdout / ctx.stderr may contain NULs; treat as byte strings
-  local out_enc = printable_binary.encode(ctx.stdout)  -- if library exposed to hooks
-  local err_enc = printable_binary.encode(ctx.stderr)
-  return string.format(
-    '{"rc":%d,"out":%q,"err":%q}\n',  -- real impl: proper JSON + encoding fields
-    ctx.status, out_enc, err_enc)
+  return '{"rc":' .. ctx.status .. ',"out":"...","err":"..."}'
 end)
--- C writes return value to the designated FD
+-- RASH_CAPTURE_FD=3 cmd 3>result.json
 ```
 
-Exposing printable-binary into the sandbox needs an explicit port or a
-carefully loaded pure-Lua codec (no FFI) — hooks currently forbid FFI.
+## Deferred candidates
+
+### D. `rash.before` for pipe children
+
+Usually worse than `before_pipeline` (deny mid-pipe). Deferred.
+
+### F. `rash.on_assignment` / nameref / `declare`
+
+| | |
+|---|---|
+| **Where** | Assignment word application / `bind_*` |
+| **Receives** | Name, value (sensitive!), attributes |
+| **Why** | Secret-in-env audit; readonly violations |
+| **Cost** | Extremely hot; easy to leak secrets into logs |
+| **Status** | Deferred |
+
+### G. Job / wait / trap seams
+
+| | |
+|---|---|
+| **Where** | `wait_for`, trap dispatch |
+| **Receives** | Job id, status, signal |
+| **Why** | Agent job supervision |
+| **Cost** | Overlaps existing trap machinery; easy to break job control |
+| **Status** | Deferred |
 
 ### F. `rash.on_assignment` / nameref / `declare`
 
@@ -197,7 +190,7 @@ carefully loaded pure-Lua codec (no FFI) — hooks currently forbid FFI.
 | Port | Role | Typical stage |
 |---|---|---|
 | `rash.warn` | stderr message | any |
-| `rash.deny(reason)` | abort current stage | hook / before / redirect / download-pipe |
+| `rash.deny(reason)` | abort current stage | hook / before / before_pipeline / on_builtin / on_function / on_exec / redirect / download-pipe |
 | `rash.spawn(argv)` | fork/exec, capture out/err (64 KiB), no hook re-entry | any |
 | `rash.snapshot_file` / `rash.undo_last` | clobber preimage stack | redirect / clobber |
 | `rash.approve_bytes` / `rash.exec_with_stdin` | installer review + exact stdin exec | download-pipe |
@@ -221,3 +214,4 @@ carefully loaded pure-Lua codec (no FFI) — hooks currently forbid FFI.
 | Date | Change |
 |---|---|
 | 2026-09-09 | Initial catalog: implemented seams + candidates; capture/FD JSON idea (E) |
+| 2026-09-09 | Landed `before_pipeline`, `on_exec`, `on_builtin`/`on_function`, `on_stdio_bundle` |

@@ -500,7 +500,8 @@ RASH_HOOKS = $(srcdir)/hooks/warn_sudo_tee.lua \
 	$(srcdir)/hooks/deny_sudo_tee.lua \
 	$(srcdir)/hooks/deny_sensitive_clobber.lua \
 	$(srcdir)/hooks/undo_precious_clobber.lua \
-	$(srcdir)/hooks/approve_download_pipe.lua
+	$(srcdir)/hooks/approve_download_pipe.lua \
+	$(srcdir)/hooks/example_stdio_json.lua
 
 SOURCES	 = $(CSOURCES) $(HSOURCES) $(RASH_HOOKS) $(BUILTIN_DEFS)
 
@@ -1003,7 +1004,8 @@ uninstall:	.made
 	$(DESTDIR)$(RASH_HOOKS_DIR)/deny_sudo_tee.lua \
 	$(DESTDIR)$(RASH_HOOKS_DIR)/deny_sensitive_clobber.lua \
 	$(DESTDIR)$(RASH_HOOKS_DIR)/undo_precious_clobber.lua \
-	$(DESTDIR)$(RASH_HOOKS_DIR)/approve_download_pipe.lua
+	$(DESTDIR)$(RASH_HOOKS_DIR)/approve_download_pipe.lua \
+	$(DESTDIR)$(RASH_HOOKS_DIR)/example_stdio_json.lua
 	-( cd $(DOCDIR) ; $(MAKE) $(BASH_MAKEFLAGS) \
 		man1dir=$(man1dir) man1ext=$(man1ext) \
 		man3dir=$(man3dir) man3ext=$(man3ext) \

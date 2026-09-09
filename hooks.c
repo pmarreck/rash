@@ -103,24 +103,43 @@ static int after_table_ref = LUA_NOREF;
 static int redirect_table_ref = LUA_NOREF;
 static int clobber_table_ref = LUA_NOREF;
 static int download_pipe_table_ref = LUA_NOREF;
+static int before_pipeline_table_ref = LUA_NOREF;
+static int on_builtin_table_ref = LUA_NOREF;
+static int on_function_table_ref = LUA_NOREF;
+static int on_exec_table_ref = LUA_NOREF;
+static int stdio_bundle_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
 static int redirect_count;
 static int clobber_count;
 static int download_pipe_count;
+static int before_pipeline_count;
+static int on_builtin_count;
+static int on_function_count;
+static int on_exec_count;
+static int stdio_bundle_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
 static int *redirect_enforcing;
 static int *clobber_enforcing;
 static int *download_pipe_enforcing;
+static int *before_pipeline_enforcing;
+static int *on_builtin_enforcing;
+static int *on_function_enforcing;
+static int *on_exec_enforcing;
+static int *stdio_bundle_enforcing;
 static int loading_file_enforcing;
 static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
 static int in_redirect_stage;
 static int in_download_pipe_stage;
+static int in_before_pipeline_stage;
+static int in_builtin_stage;
+static int in_function_stage;
+static int in_exec_stage;
 static int download_pipe_handled;
 static int download_pipe_exec_status;
 static int stage_denied;
@@ -142,6 +161,11 @@ static int rash_lua_after (lua_State *);
 static int rash_lua_on_redirect (lua_State *);
 static int rash_lua_on_clobber (lua_State *);
 static int rash_lua_on_download_pipe (lua_State *);
+static int rash_lua_before_pipeline (lua_State *);
+static int rash_lua_on_builtin (lua_State *);
+static int rash_lua_on_function (lua_State *);
+static int rash_lua_on_exec (lua_State *);
+static int rash_lua_on_stdio_bundle (lua_State *);
 static int rash_lua_approve_bytes (lua_State *);
 static int rash_lua_exec_with_stdin (lua_State *);
 static int rash_lua_snapshot_file (lua_State *);
@@ -175,6 +199,11 @@ static int rash_undo_ensure_dir (const char *, char *, size_t);
 static char *rash_undo_abspath (const char *);
 static int rash_undo_copy_file (const char *, const char *, off_t);
 static int rash_hooks_have_redirect_observers (void);
+static int rash_hooks_have_any_observers (void);
+static WORD_LIST *rash_copy_expand_simple (COMMAND *);
+static void rash_push_named_words_ctx (lua_State *, const char *, WORD_LIST *);
+static int rash_capture_fd (void);
+static void rash_write_fully (int, const char *, size_t);
 
 static void
 rash_hooks_close_retired_lua (void)
@@ -460,6 +489,44 @@ rash_lua_on_download_pipe (lua_State *L)
 				 &download_pipe_enforcing, &download_pipe_count);
 }
 
+static int
+rash_lua_before_pipeline (lua_State *L)
+{
+  /* Parent, top of execute_pipeline, expanded copies of each simple side. */
+  return rash_register_callback (L, before_pipeline_table_ref,
+				 &before_pipeline_enforcing, &before_pipeline_count);
+}
+
+static int
+rash_lua_on_builtin (lua_State *L)
+{
+  return rash_register_callback (L, on_builtin_table_ref,
+				 &on_builtin_enforcing, &on_builtin_count);
+}
+
+static int
+rash_lua_on_function (lua_State *L)
+{
+  return rash_register_callback (L, on_function_table_ref,
+				 &on_function_enforcing, &on_function_count);
+}
+
+static int
+rash_lua_on_exec (lua_State *L)
+{
+  /* Invoked from shell_execve immediately before execve(2). */
+  return rash_register_callback (L, on_exec_table_ref,
+				 &on_exec_enforcing, &on_exec_count);
+}
+
+static int
+rash_lua_on_stdio_bundle (lua_State *L)
+{
+  /* After a simple command; return a string to write to RASH_CAPTURE_FD. */
+  return rash_register_callback (L, stdio_bundle_table_ref,
+				 &stdio_bundle_enforcing, &stdio_bundle_count);
+}
+
 static void
 rash_mark_denied (RASH_HOOK_CONTEXT *context, const char *reason)
 {
@@ -494,8 +561,10 @@ rash_lua_deny (lua_State *L)
       return 0;
     }
 
-  /* Expanded-stage before / redirect / download-pipe sensors use stage_denied. */
-  if (in_before_stage || in_redirect_stage || in_download_pipe_stage)
+  /* Stage sensors use stage_denied rather than parse-stage hook context. */
+  if (in_before_stage || in_redirect_stage || in_download_pipe_stage
+      || in_before_pipeline_stage || in_builtin_stage || in_function_stage
+      || in_exec_stage)
     {
       if (stage_denied == 0)
 	{
@@ -883,6 +952,16 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "on_clobber");
   lua_pushcfunction (L, rash_lua_on_download_pipe);
   lua_setfield (L, -2, "on_download_pipe");
+  lua_pushcfunction (L, rash_lua_before_pipeline);
+  lua_setfield (L, -2, "before_pipeline");
+  lua_pushcfunction (L, rash_lua_on_builtin);
+  lua_setfield (L, -2, "on_builtin");
+  lua_pushcfunction (L, rash_lua_on_function);
+  lua_setfield (L, -2, "on_function");
+  lua_pushcfunction (L, rash_lua_on_exec);
+  lua_setfield (L, -2, "on_exec");
+  lua_pushcfunction (L, rash_lua_on_stdio_bundle);
+  lua_setfield (L, -2, "on_stdio_bundle");
   lua_pushcfunction (L, rash_lua_approve_bytes);
   lua_setfield (L, -2, "approve_bytes");
   lua_pushcfunction (L, rash_lua_exec_with_stdin);
@@ -916,6 +995,16 @@ rash_lua_ready (void)
   clobber_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   lua_newtable (L);
   download_pipe_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  before_pipeline_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  on_builtin_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  on_function_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  on_exec_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  stdio_bundle_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   rash_lua = L;
   return 1;
 }
@@ -1183,10 +1272,17 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   int *previous_enforcing, *previous_before_enforcing, *previous_after_enforcing;
   int *previous_redirect_enforcing, *previous_clobber_enforcing;
   int *previous_download_pipe_enforcing;
+  int *previous_before_pipeline_enforcing, *previous_on_builtin_enforcing;
+  int *previous_on_function_enforcing, *previous_on_exec_enforcing;
+  int *previous_stdio_bundle_enforcing;
   int previous_count, previous_before_count, previous_after_count;
   int previous_redirect_count, previous_clobber_count, previous_download_pipe_count;
+  int previous_before_pipeline_count, previous_on_builtin_count;
+  int previous_on_function_count, previous_on_exec_count, previous_stdio_bundle_count;
   int previous_ref, previous_before_ref, previous_after_ref;
   int previous_redirect_ref, previous_clobber_ref, previous_download_pipe_ref;
+  int previous_before_pipeline_ref, previous_on_builtin_ref;
+  int previous_on_function_ref, previous_on_exec_ref, previous_stdio_bundle_ref;
   int previous_state;
   int loaded, snapshotted;
   RASH_HOOK_MANIFEST manifest;
@@ -1199,26 +1295,47 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   previous_redirect_ref = redirect_table_ref;
   previous_clobber_ref = clobber_table_ref;
   previous_download_pipe_ref = download_pipe_table_ref;
+  previous_before_pipeline_ref = before_pipeline_table_ref;
+  previous_on_builtin_ref = on_builtin_table_ref;
+  previous_on_function_ref = on_function_table_ref;
+  previous_on_exec_ref = on_exec_table_ref;
+  previous_stdio_bundle_ref = stdio_bundle_table_ref;
   previous_count = hook_count;
   previous_before_count = before_count;
   previous_after_count = after_count;
   previous_redirect_count = redirect_count;
   previous_clobber_count = clobber_count;
   previous_download_pipe_count = download_pipe_count;
+  previous_before_pipeline_count = before_pipeline_count;
+  previous_on_builtin_count = on_builtin_count;
+  previous_on_function_count = on_function_count;
+  previous_on_exec_count = on_exec_count;
+  previous_stdio_bundle_count = stdio_bundle_count;
   previous_enforcing = hook_enforcing;
   previous_before_enforcing = before_enforcing;
   previous_after_enforcing = after_enforcing;
   previous_redirect_enforcing = redirect_enforcing;
   previous_clobber_enforcing = clobber_enforcing;
   previous_download_pipe_enforcing = download_pipe_enforcing;
+  previous_before_pipeline_enforcing = before_pipeline_enforcing;
+  previous_on_builtin_enforcing = on_builtin_enforcing;
+  previous_on_function_enforcing = on_function_enforcing;
+  previous_on_exec_enforcing = on_exec_enforcing;
+  previous_stdio_bundle_enforcing = stdio_bundle_enforcing;
   previous_state = hook_state;
   rash_lua = 0;
   hook_table_ref = before_table_ref = after_table_ref = LUA_NOREF;
   redirect_table_ref = clobber_table_ref = download_pipe_table_ref = LUA_NOREF;
+  before_pipeline_table_ref = on_builtin_table_ref = on_function_table_ref = LUA_NOREF;
+  on_exec_table_ref = stdio_bundle_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
   redirect_count = clobber_count = download_pipe_count = 0;
+  before_pipeline_count = on_builtin_count = on_function_count = 0;
+  on_exec_count = stdio_bundle_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
   redirect_enforcing = clobber_enforcing = download_pipe_enforcing = 0;
+  before_pipeline_enforcing = on_builtin_enforcing = on_function_enforcing = 0;
+  on_exec_enforcing = stdio_bundle_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -1228,9 +1345,7 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
 
   if (loaded && snapshotted)
     {
-      hook_state = (hook_count > 0 || before_count > 0 || after_count > 0
-		    || redirect_count > 0 || clobber_count > 0
-		    || download_pipe_count > 0) ? 1 : -1;
+      hook_state = rash_hooks_have_any_observers () ? 1 : -1;
       rash_hook_save_configuration (directory, allow_unowned, enforce_unowned);
       rash_hook_manifest_replace (&manifest);
       free (previous_enforcing);
@@ -1239,6 +1354,11 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
       free (previous_redirect_enforcing);
       free (previous_clobber_enforcing);
       free (previous_download_pipe_enforcing);
+      free (previous_before_pipeline_enforcing);
+      free (previous_on_builtin_enforcing);
+      free (previous_on_function_enforcing);
+      free (previous_on_exec_enforcing);
+      free (previous_stdio_bundle_enforcing);
       if (previous_lua)
 	{
 	  if (hook_execution_depth)
@@ -1257,6 +1377,11 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   free (redirect_enforcing);
   free (clobber_enforcing);
   free (download_pipe_enforcing);
+  free (before_pipeline_enforcing);
+  free (on_builtin_enforcing);
+  free (on_function_enforcing);
+  free (on_exec_enforcing);
+  free (stdio_bundle_enforcing);
   rash_lua = previous_lua;
   hook_table_ref = previous_ref;
   before_table_ref = previous_before_ref;
@@ -1264,18 +1389,33 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   redirect_table_ref = previous_redirect_ref;
   clobber_table_ref = previous_clobber_ref;
   download_pipe_table_ref = previous_download_pipe_ref;
+  before_pipeline_table_ref = previous_before_pipeline_ref;
+  on_builtin_table_ref = previous_on_builtin_ref;
+  on_function_table_ref = previous_on_function_ref;
+  on_exec_table_ref = previous_on_exec_ref;
+  stdio_bundle_table_ref = previous_stdio_bundle_ref;
   hook_count = previous_count;
   before_count = previous_before_count;
   after_count = previous_after_count;
   redirect_count = previous_redirect_count;
   clobber_count = previous_clobber_count;
   download_pipe_count = previous_download_pipe_count;
+  before_pipeline_count = previous_before_pipeline_count;
+  on_builtin_count = previous_on_builtin_count;
+  on_function_count = previous_on_function_count;
+  on_exec_count = previous_on_exec_count;
+  stdio_bundle_count = previous_stdio_bundle_count;
   hook_enforcing = previous_enforcing;
   before_enforcing = previous_before_enforcing;
   after_enforcing = previous_after_enforcing;
   redirect_enforcing = previous_redirect_enforcing;
   clobber_enforcing = previous_clobber_enforcing;
   download_pipe_enforcing = previous_download_pipe_enforcing;
+  before_pipeline_enforcing = previous_before_pipeline_enforcing;
+  on_builtin_enforcing = previous_on_builtin_enforcing;
+  on_function_enforcing = previous_on_function_enforcing;
+  on_exec_enforcing = previous_on_exec_enforcing;
+  stdio_bundle_enforcing = previous_stdio_bundle_enforcing;
   hook_state = previous_lua ? previous_state : -1;
   rash_hook_save_configuration (directory, allow_unowned, enforce_unowned);
   if (snapshotted)
@@ -1536,6 +1676,82 @@ static int
 rash_hooks_have_redirect_observers (void)
 {
   return redirect_count > 0 || clobber_count > 0;
+}
+
+static int
+rash_hooks_have_any_observers (void)
+{
+  return hook_count > 0 || before_count > 0 || after_count > 0
+    || redirect_count > 0 || clobber_count > 0 || download_pipe_count > 0
+    || before_pipeline_count > 0 || on_builtin_count > 0
+    || on_function_count > 0 || on_exec_count > 0
+    || stdio_bundle_count > 0;
+}
+
+/* Expand a copy of a simple command's words; NULL if the side is not simple. */
+static WORD_LIST *
+rash_copy_expand_simple (COMMAND *cmd)
+{
+  WORD_LIST *copy, *expanded;
+
+  if (cmd == 0 || cmd->type != cm_simple || cmd->value.Simple == 0)
+    return 0;
+  copy = copy_word_list (cmd->value.Simple->words);
+  expanded = expand_words (copy);
+  dispose_words (copy);
+  return expanded;
+}
+
+static void
+rash_push_named_words_ctx (lua_State *L, const char *name, WORD_LIST *words)
+{
+  lua_newtable (L);
+  lua_pushstring (L, name ? name : "");
+  lua_setfield (L, -2, "name");
+  rash_push_words (L, words);
+  lua_setfield (L, -2, "words");
+}
+
+static int
+rash_capture_fd (void)
+{
+  const char *raw;
+  char *end;
+  long value;
+
+  raw = getenv ("RASH_CAPTURE_FD");
+  if (raw == 0 || raw[0] == '\0')
+    return -1;
+  errno = 0;
+  value = strtol (raw, &end, 10);
+  if (errno != 0 || end == raw || *end != '\0' || value < 0 || value > INT_MAX)
+    return -1;
+  return (int)value;
+}
+
+static void
+rash_write_fully (int fd, const char *buf, size_t len)
+{
+  size_t off;
+
+  if (fd < 0 || buf == 0)
+    return;
+  off = 0;
+  while (off < len)
+    {
+      ssize_t n;
+
+      n = write (fd, buf + off, len - off);
+      if (n < 0)
+	{
+	  if (errno == EINTR)
+	    continue;
+	  return;
+	}
+      if (n == 0)
+	return;
+      off += (size_t)n;
+    }
 }
 
 static char *
@@ -2820,6 +3036,334 @@ rash_hooks_after_simple (WORD_LIST *words, int status,
 			     lua_error ? lua_error : "(no error object)");
 	  lua_pop (rash_lua, 1);
 	}
+    }
+  lua_settop (rash_lua, base);
+  current_hook_enforcing = 0;
+}
+
+int
+rash_hooks_before_pipeline (COMMAND *command)
+{
+  COMMAND *left, *right;
+  WORD_LIST *left_words, *right_words;
+  int i, base, status;
+
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || before_pipeline_count == 0 || rash_lua == 0)
+    return 0;
+  if (command == 0 || command->type != cm_connection || command->value.Connection == 0
+      || command->value.Connection->connector != '|')
+    return 0;
+
+  left = command->value.Connection->first;
+  right = command->value.Connection->second;
+  left_words = rash_copy_expand_simple (left);
+  right_words = rash_copy_expand_simple (right);
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_before_pipeline_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= before_pipeline_count; i++)
+    {
+      current_hook_enforcing = before_pipeline_enforcing && before_pipeline_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, before_pipeline_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      lua_newtable (rash_lua);
+      rash_push_words (rash_lua, left_words);
+      lua_setfield (rash_lua, -2, "left_words");
+      rash_push_words (rash_lua, right_words);
+      lua_setfield (rash_lua, -2, "right_words");
+      lua_pushliteral (rash_lua, "|");
+      lua_setfield (rash_lua, -2, "connector");
+      status = rash_lua_pcall (rash_lua, 1, 0);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing before_pipeline failed; denying pipeline: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing before_pipeline failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory before_pipeline failed; continuing: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_before_pipeline_stage = 0;
+  current_hook_enforcing = 0;
+  dispose_words (left_words);
+  dispose_words (right_words);
+  return stage_denied ? EXECUTION_FAILURE : 0;
+}
+
+int
+rash_hooks_on_builtin (WORD_LIST *words)
+{
+  const char *name;
+  int i, base, status;
+
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || on_builtin_count == 0 || rash_lua == 0)
+    return 0;
+
+  name = 0;
+  if (words && words->word && words->word->word)
+    name = words->word->word;
+  else
+    name = this_command_name;
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_builtin_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= on_builtin_count; i++)
+    {
+      current_hook_enforcing = on_builtin_enforcing && on_builtin_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, on_builtin_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      rash_push_named_words_ctx (rash_lua, name, words);
+      status = rash_lua_pcall (rash_lua, 1, 0);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing on_builtin failed; denying builtin: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing on_builtin failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory on_builtin failed; continuing: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_builtin_stage = 0;
+  current_hook_enforcing = 0;
+  return stage_denied ? EXECUTION_FAILURE : 0;
+}
+
+int
+rash_hooks_on_function (const char *name, WORD_LIST *words)
+{
+  int i, base, status;
+
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || on_function_count == 0 || rash_lua == 0)
+    return 0;
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_function_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= on_function_count; i++)
+    {
+      current_hook_enforcing = on_function_enforcing && on_function_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, on_function_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      rash_push_named_words_ctx (rash_lua, name, words);
+      status = rash_lua_pcall (rash_lua, 1, 0);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing on_function failed; denying function: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing on_function failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory on_function failed; continuing: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_function_stage = 0;
+  current_hook_enforcing = 0;
+  return stage_denied ? EXECUTION_FAILURE : 0;
+}
+
+int
+rash_hooks_on_exec (const char *path, char **args)
+{
+  int i, base, status, argc;
+
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || on_exec_count == 0 || rash_lua == 0)
+    return 0;
+
+  argc = 0;
+  if (args)
+    {
+      while (args[argc])
+	argc++;
+    }
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_exec_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= on_exec_count; i++)
+    {
+      current_hook_enforcing = on_exec_enforcing && on_exec_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, on_exec_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      lua_newtable (rash_lua);
+      lua_pushstring (rash_lua, path ? path : "");
+      lua_setfield (rash_lua, -2, "path");
+      rash_push_argv_table (rash_lua, args, argc);
+      lua_pushvalue (rash_lua, -1);
+      lua_setfield (rash_lua, -3, "words");
+      lua_setfield (rash_lua, -2, "argv");
+      status = rash_lua_pcall (rash_lua, 1, 0);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing on_exec failed; denying exec: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing on_exec failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory on_exec failed; continuing: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_exec_stage = 0;
+  current_hook_enforcing = 0;
+  if (stage_denied)
+    {
+      last_command_exit_value = EXECUTION_FAILURE;
+      return EXECUTION_FAILURE;
+    }
+  return 0;
+}
+
+int
+rash_hooks_want_stdio_bundle (void)
+{
+  if (running_trap != 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || stdio_bundle_count == 0 || rash_lua == 0)
+    return 0;
+  return rash_capture_fd () >= 0;
+}
+
+void
+rash_hooks_stdio_bundle (WORD_LIST *words, int status,
+			 const char *captured_stdout, size_t stdout_len,
+			 const char *captured_stderr, size_t stderr_len)
+{
+  int i, base, rc, fd;
+
+  if (running_trap != 0)
+    return;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (hook_state != 1 || stdio_bundle_count == 0 || rash_lua == 0)
+    return;
+  fd = rash_capture_fd ();
+  if (fd < 0)
+    return;
+
+  base = lua_gettop (rash_lua);
+  for (i = 1; i <= stdio_bundle_count; i++)
+    {
+      current_hook_enforcing = stdio_bundle_enforcing && stdio_bundle_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, stdio_bundle_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      rash_push_expanded_ctx (rash_lua, words, status,
+			      captured_stdout, stdout_len,
+			      captured_stderr, stderr_len);
+      rc = rash_lua_pcall (rash_lua, 1, 1);
+      if (rc != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  rash_hook_warning ("on_stdio_bundle failed: ",
+			     lua_error ? lua_error : "(no error object)");
+	  lua_pop (rash_lua, 1);
+	}
+      else if (lua_isstring (rash_lua, -1))
+	{
+	  size_t len;
+	  const char *payload;
+
+	  payload = lua_tolstring (rash_lua, -1, &len);
+	  rash_write_fully (fd, payload, len);
+	  lua_pop (rash_lua, 1);
+	}
+      else
+	lua_pop (rash_lua, 1);
     }
   lua_settop (rash_lua, base);
   current_hook_enforcing = 0;

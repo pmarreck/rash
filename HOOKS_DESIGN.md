@@ -57,6 +57,58 @@ end)
 This stage is **sensitive**: expanded words can contain secrets. Prefer
 structure-only policy at parse stage; use `before`/`after` when you truly need
 values. Captures intentionally skip pipelines so we do not break `|` plumbing.
+Pipeline stages never see `before` (Bash forks before expand); use
+`before_pipeline` instead.
+
+### Pipeline before — `rash.before_pipeline`
+
+At the top of `execute_pipeline`, **before** download-pipe intercept and before
+forking stages. Expands copies of left/right simple-command words in the parent:
+
+```lua
+rash.before_pipeline(function(ctx)
+  -- ctx.left_words / ctx.right_words: expanded argv tables
+  -- ctx.connector: "|"
+  -- rash.deny aborts the whole pipeline
+end)
+```
+
+Closes the `"$URL" | bash` gap for expanded URL allow/deny. Command
+substitutions on either side run at this expand (earlier than stock right-side
+timing).
+
+### Builtin / function / exec
+
+```lua
+rash.on_builtin(function(ctx)   -- ctx.name, ctx.words (expanded)
+  if ctx.name == "eval" then rash.deny("no eval") end
+end)
+
+rash.on_function(function(ctx)  -- ctx.name, ctx.words
+  if ctx.name == "danger" then rash.deny("blocked") end
+end)
+
+rash.on_exec(function(ctx)      -- ctx.path, ctx.words (final argv)
+  -- deny → no execve (foundation for content-hash allowlists)
+end)
+```
+
+### Stdio bundle — `rash.on_stdio_bundle` + `RASH_CAPTURE_FD`
+
+When handlers are registered and `RASH_CAPTURE_FD=<n>` is set, simple commands
+(not mid-pipe/async) capture stdout/stderr like `after`. Lua **returns a
+string**; C writes it to FD `n`:
+
+```lua
+rash.on_stdio_bundle(function(ctx)
+  -- ctx.status, ctx.stdout, ctx.stderr, ctx.words
+  return '{"rc":' .. ctx.status .. ',"out":"...","err":"..."}'
+end)
+-- RASH_CAPTURE_FD=3 cmd 3>result.json
+```
+
+Intended to replace hairy `capture.bash` FD juggling. Binary-safe encoding
+(printable-binary) is still Lua’s job until a dedicated encode port lands.
 
 ### Redirect sensors + clobber undo
 

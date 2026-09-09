@@ -1,0 +1,137 @@
+# New lifecycle seams: before_pipeline, on_builtin, on_function, on_exec, on_stdio_bundle
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-lifecycle.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir "$tmp/bin" || exit 1
+cat > "$tmp/bin/curl" <<'EOF'
+#!/bin/sh
+printf 'echo from-curl\n'
+EOF
+chmod +x "$tmp/bin/curl"
+export PATH="$tmp/bin:$PATH"
+
+# --- before_pipeline sees expanded URL ---
+cat > "$tmp/before-pipe.lua" <<'LUA'
+rash.before_pipeline(function(ctx)
+  local left = ""
+  local i = 1
+  while ctx.left_words[i] do
+    if i > 1 then left = left .. "," end
+    left = left .. ctx.left_words[i]
+    i = i + 1
+  end
+  rash.warn("pipeline-left=" .. left)
+  if ctx.left_words[1] == "curl" and ctx.left_words[2] == "https://expanded.example/x" then
+    rash.warn("pipeline-saw-expanded-url")
+  end
+end)
+LUA
+err=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 \
+  ${THIS_SH} --norc --noprofile -c 'U=https://expanded.example/x; curl "$U" | cat' 2>&1 >/dev/null)
+echo "before_pipeline expanded url: $(contains "$err" "pipeline-saw-expanded-url")"
+
+# --- before_pipeline deny ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/deny-pipe.lua" <<'LUA'
+rash.before_pipeline(function(ctx)
+  if ctx.left_words[1] == "curl" then
+    rash.deny("no curl pipelines")
+  end
+end)
+LUA
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+  ${THIS_SH} --norc --noprofile -c 'curl https://x | cat' 2> "$tmp/err")
+status=$?
+err=$(cat "$tmp/err")
+echo "before_pipeline deny status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "before_pipeline deny reason: $(contains "$err" "no curl pipelines")"
+echo "before_pipeline deny no stdout: $( [ -z "$out" ] && echo yes || echo no )"
+# --- on_builtin deny eval ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/deny-eval.lua" <<'LUA'
+rash.on_builtin(function(ctx)
+  if ctx.name == "eval" then
+    rash.deny("no eval")
+  end
+end)
+LUA
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+  ${THIS_SH} --norc --noprofile -c 'eval "printf HI"; printf DONE' 2> "$tmp/err")
+status=$?
+err=$(cat "$tmp/err")
+echo "on_builtin deny eval: $(contains "$err" "no eval")"
+echo "on_builtin eval blocked HI: $(contains "$out" "HI")"
+echo "on_builtin after still runs: $(contains "$out" "DONE")"
+
+# --- on_function deny ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/deny-fn.lua" <<'LUA'
+rash.on_function(function(ctx)
+  if ctx.name == "danger" then
+    rash.deny("no danger fn")
+  end
+end)
+LUA
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+  ${THIS_SH} --norc --noprofile -c 'danger(){ printf BOOM; }; danger; printf AFTER' 2> "$tmp/err")
+err=$(cat "$tmp/err")
+echo "on_function deny: $(contains "$err" "no danger fn")"
+echo "on_function blocked BOOM: $(contains "$out" "BOOM")"
+echo "on_function after: $(contains "$out" "AFTER")"
+
+# --- on_exec deny by basename ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/bin/evilbin" <<'EOF'
+#!/bin/sh
+printf EVIL
+EOF
+chmod +x "$tmp/bin/evilbin"
+cat > "$tmp/deny-exec.lua" <<'LUA'
+rash.on_exec(function(ctx)
+  local path = ctx.path or ""
+  if string.find(path, "evilbin", 1, true) then
+    rash.deny("no evilbin")
+  end
+end)
+LUA
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+  ${THIS_SH} --norc --noprofile -c 'evilbin; printf AFTER' 2> "$tmp/err")
+err=$(cat "$tmp/err")
+echo "on_exec deny: $(contains "$err" "no evilbin")"
+echo "on_exec blocked EVIL: $(contains "$out" "EVIL")"
+echo "on_exec after: $(contains "$out" "AFTER")"
+
+# --- on_stdio_bundle writes JSON to capture FD ---
+rm -f "$tmp"/*.lua
+cat > "$tmp/bundle.lua" <<'LUA'
+rash.on_stdio_bundle(function(ctx)
+  local out = ctx.stdout or ""
+  local err = ctx.stderr or ""
+  -- minimal JSON (text-only fixture)
+  out = string.gsub(out, '\\', '\\\\')
+  out = string.gsub(out, '"', '\\"')
+  out = string.gsub(out, '\n', '\\n')
+  err = string.gsub(err, '\\', '\\\\')
+  err = string.gsub(err, '"', '\\"')
+  err = string.gsub(err, '\n', '\\n')
+  return '{"rc":' .. tostring(ctx.status) .. ',"out":"' .. out .. '","err":"' .. err .. '"}'
+end)
+LUA
+json=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_CAPTURE_FD=3 \
+  ${THIS_SH} --norc --noprofile -c 'printf hello; printf eek >&2' 3>"$tmp/cap.json" 2>/dev/null)
+# Command stdout may still appear; assert capture FD payload
+cap=$(cat "$tmp/cap.json" 2>/dev/null)
+echo "stdio_bundle has rc: $(contains "$cap" '"rc":0')"
+echo "stdio_bundle has out: $(contains "$cap" 'hello')"
+echo "stdio_bundle has err: $(contains "$cap" 'eek')"

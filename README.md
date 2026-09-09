@@ -43,6 +43,10 @@ pipelines: the producer is buffered, `rash.approve_bytes` reviews on a tty, and
 `rash.exec_with_stdin` runs the consumer on those exact bytes
 (`INSTALLER_APPROVAL.md`).
 
+Additional lifecycle seams (see `HOOK_SEAMS.md`): `before_pipeline` (expanded
+pipe argv), `on_builtin` / `on_function` / `on_exec`, and `on_stdio_bundle` with
+`RASH_CAPTURE_FD` for structured out/err/rc capture (capture.bash replacement).
+
 Redirect sensors fire after path resolve and before `open(2)`:
 `rash.on_redirect` (all path-bearing redirects) and `rash.on_clobber` (only
 when a truncating redirect would overwrite an existing regular file).
