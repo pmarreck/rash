@@ -123,9 +123,10 @@ required. Spike item: prove pipe fork-before-expand parity via that port while
 
 ---
 
-## 7. Migration phases
+## 7. Migration phases (overview)
 
 Each phase: `./test` / `run-all` green (or an explicit divergence decision).
+Detailed ownership / crossover map: **§7A**.
 
 | Phase | Deliverable |
 |---|---|
@@ -145,6 +146,204 @@ become easier *after* phase 5+, but can be prototyped earlier on current seams.
 For an AI pair on this repo the same arc is closer to **multi-day** wall-clock
 (suite farming still dominates). Do not use human-month estimates to talk
 ourselves out of an accepted direction — use suite green / phase gates instead.
+
+---
+
+## 7A. Interim ownership and crossover points
+
+Goal of this section: while migrating, **LuaJIT owns some slices and C owns
+others**. Every phase must name (1) the single choke point where control
+crosses, (2) what data crosses, (3) what must *not* be dual-implemented yet,
+(4) which suite classes are the canaries.
+
+Invariant for all interim phases: **one authoritative executor per concern**.
+Never “Lua expand *and* C expand both live on the same word list.” Dual paths
+are how suites go intermittently red.
+
+### 7A.0 Today (baseline)
+
+| Concern | Owner |
+|---|---|
+| Parse (`parse.y` → `COMMAND *`) | C |
+| Outermost execute entry | C (`execute_command` → hooks wrap → `execute_command_internal`) |
+| Expand / redirect / dispatch / fork / wait | C |
+| Policy sensors | Lua (opt-in), called from C seams |
+
+Crossover today: C → Lua (ctx in) → Lua ports / deny → C continues. No Lua-owned pipeline.
+
+### 7A.1 Phase 1 — Outer Rack identity (first real crossover)
+
+**Lua owns:** the *middleware stack shell* around one outermost command.  
+**C owns:** everything inside `execute_command_internal` (unchanged).
+
+```
+execute_command / eval loop
+    → build cmd { ast = COMMAND* userdata }
+    → Lua: blessed_stack(cmd, next)
+         → default next = rash_c.execute_command_internal(cmd.ast, …)
+    → status back to C eval loop
+```
+
+| Crossing | Direction | Payload |
+|---|---|---|
+| Enter stack | C → Lua | `COMMAND *` handle, async/pipe flags, fd bitmap ref |
+| Default `next` | Lua → C | same handle + flags |
+| Return | C → Lua → C | integer status only |
+
+**Must not yet:** Lua expand, Lua redirect, Lua fork planning, IR lower.  
+**Today’s hooks:** either (a) remain C-called seams inside the C body, or (b)
+become the *only* middleware layers whose `next` is still full C — prefer (b)
+only after they are rebased onto `cmd` without behavior change.  
+**Canary suite:** entire `run-all` must be bit-identical in intent (exit codes +
+`.right` files). This phase is worthless if anything drifts.  
+**Rollback:** compile flag / runtime `RASH_EXEC=c` skips Lua stack entirely.
+
+Phase 1 success = “we can insert a no-op Lua layer and nobody can tell.”
+
+### 7A.2 Phase 2 — Dispatch crossover (builtin | function | disk)
+
+**Lua owns:** choice of leaf after C (or Lua) has produced expanded words.  
+**C owns:** `execute_builtin`, `execute_function`, `execute_disk_command` /
+`shell_execve` bodies as **ports**.
+
+Interim shape for a **simple** command only (connections still 100% C):
+
+```
+C execute_simple_command … through expand_words …
+    → hand expanded WORD_LIST + redirects to Lua dispatch middleware
+    → Lua next = one of:
+         rash_c.builtin(name, words)
+         rash_c.function(name, words)
+         rash_c.disk(path, argv, redirects)
+```
+
+| Crossing | Payload |
+|---|---|
+| C → Lua | expanded words (copy or userdata), redirect list, flags |
+| Lua → C port | name/path + argv + redirect intent |
+| C → Lua | status |
+
+**Still C-owned:** pipelines (`execute_pipeline`), connections (`;`, `&`, `&&`,
+`||`), loops/case/if, job control, expand itself.  
+**Canaries:** `run-builtins`, `run-func`, `run-execscript`, `run-type`,
+`run-varenv`; plus identity that `cm_connection` paths never enter Lua dispatch
+yet.  
+**Trap:** do not let Lua “almost” own pipelines here — fork-before-expand will
+bite. Connections stay behind the phase-1 default `next` into full C.
+
+### 7A.3 Phase 3 — Expand crossover
+
+**Lua owns:** decision *when* to expand and optional Lua expand for a
+**declared subset** (e.g. simple unquoted words).  
+**C owns:** `expand_words` as the default port; full bashism expand remains C
+until subset proofs exist.
+
+```
+Lua expand middleware
+    → rash_c.expand_words(word_list_handle)   -- default
+    → OR lua_expand_simple(words) for allowlisted shapes only
+    → write cmd.words
+    → next(cmd)  -- dispatch from phase 2
+```
+
+| Crossing | Payload |
+|---|---|
+| Lua → C expand | `WORD_LIST *` (or IR words lowered to WORD_LIST once) |
+| C → Lua | new `WORD_LIST *` / string table |
+
+**Dual-path rule:** a command shape uses **either** C expand **or** Lua expand,
+selected by a pure classifier; never both. Classifier tests over sets (not one
+example).  
+**Canaries:** `run-exp`, `run-new-exp`, `run-quote*`, `run-nquote*`, `run-glob*`,
+`run-comsub*`, `run-arith*`. Comsub and quoted forms stay on C expand until
+explicitly migrated.  
+**Rollback:** classifier always returns “use C.”
+
+### 7A.4 Phase 4 — Redirect crossover
+
+**Lua owns:** redirect *policy* and intent list on `cmd`.  
+**C owns:** `do_redirections` / `redir_open` as apply ports (open, dup, close).
+
+```
+Lua redirect middleware
+    → may deny / snapshot (today’s on_clobber logic moves here)
+    → rash_c.apply_redirects(cmd.redirects)
+    → next(cmd)
+```
+
+Clobber undo / download-pipe rebase onto `cmd` fields instead of ad-hoc seams.  
+**Canaries:** `run-redir`, `run-heredoc`, `run-herestr`, `run-vredir`, plus Rash
+`clobber-undo` / `installer-approval`.  
+**Still C:** heredoc temp file creation details inside the apply port.
+
+### 7A.5 Phase 5 — IR lower (marshalling ends)
+
+**Lua owns:** `cmd` IR for the whole execute path of migrated shapes.  
+**C owns:** parse only (`COMMAND *` → one-shot `rash_c.lower(ast) → IR`), plus
+leaf ports (fork/exec/open/bind/wait).
+
+```
+parse.y → COMMAND *
+    → rash_c.lower(COMMAND*) → Lua IR once
+    → blessed middleware stack (all Lua)
+    → ports only at kernel/shell-global boundary
+```
+
+**Crossover shrinks to:** lower (in), and ports (out). No WORD_LIST traffic in
+the middle.  
+**Migrate by shape family**, not by percentage of lines:
+
+1. `cm_simple` non-pipe, no assign-prefix  
+2. `cm_simple` with assign-prefix  
+3. `cm_connection` `;` / `&&` / `||`  
+4. `|` pipelines (fork port must preserve fork-before-expand)  
+5. compound (`if`/`while`/`for`/`case`/`subshell`/`group`/`coproc`)
+
+Each family flips behind a classifier; unmigrated families use phase-1 “full C
+next.” **One family at a time; suite green before the next.**  
+**Canaries:** widen with each family; pipelines + `run-lastpipe` + `run-jobs` +
+`run-trap*` before declaring pipe IR done.
+
+### 7A.6 Phase 6 — Userland read-only
+
+No new execute ownership. Blessed middleware loads user observers with **copies**
+of `cmd`; no mutator API in that state.  
+**Canaries:** existing hook trust tests (`run-hooks`, deny/unowned); plus new
+tests that userland cannot change argv/status.
+
+### 7A.7 Phase 7 — Shrink C
+
+Replace individual ports with Lua only where a **differential** against C port
+on the suite (and targeted micro suites) matches. Prefer keeping fork/jobctl/
+signal-adjacent code in C indefinitely.
+
+### 7A.8 What today’s hooks become at each stage
+
+| Today | Phase 1–2 | Phase 4–5 |
+|---|---|---|
+| `rash.hook` | middleware layer wrapping default C `next` | layer on IR |
+| `before` / `after` | stay C-seam *or* thin middleware around simple dispatch | IR layers |
+| `before_pipeline` | middleware before C `execute_pipeline` port | IR pipeline layers |
+| `on_redirect` / `on_clobber` | stay in C apply path until phase 4 | redirect middleware |
+| `on_download_pipe` | special-case middleware calling capture/exec ports | same, on IR |
+| `on_builtin` / `on_function` / `on_exec` | fold into dispatch middleware | same |
+| `on_stdio_bundle` | middleware after leaf ports return | same; structured FDs later |
+
+### 7A.9 Dual-stack danger (explicit non-goals for interim)
+
+- Two expanders both touching one command  
+- Lua planning a pipe graph while C `execute_pipeline` also runs  
+- Partial IR where `cmd.words` is Lua but redirects still secret C pointers without a port  
+- “Temporary” env `RASH_LUA_EXEC=1` as a forgeable bypass — use compile-time or root-only profile if a kill switch is needed  
+
+### 7A.10 Suggested spike order when un-shelved
+
+1. Phase 1 identity only + `RASH_EXEC=c` kill switch + full `./test`  
+2. Rebase **one** existing hook (`rash.hook`) as middleware with C `next`  
+3. Stop. Re-evaluate. Only then phase 2 simple-dispatch.  
+
+That keeps the interim tractable: each crossover is a **narrow waist**, not a
+vague “Lua owns more now.”
 
 ---
 
