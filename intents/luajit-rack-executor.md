@@ -358,9 +358,11 @@ Light extraction toward future stages **without** a C Rack registry:
   `%job` skip, autocd retry, `EX_DISKFALLBACK`, and cleanup; `leave_case`
   replaces `EXIT_CASE` (outer `break` required); restricted `/` shares parent
   cleanup sequentially instead of `parent_return`.
+- `rash_stage_dispatch_simple()` — named waist over that flag machine
+  (`struct rash_simple_dispatch` is a parameter cluster, not a Rack `cmd`).
 
-Further extract of the dispatch body is optional; it is already two
-callees (`execute_builtin_or_function`, `execute_disk_command`).
+Redirect apply remains inside `execute_builtin_or_function` /
+`execute_disk_command`.
 
 ---
 

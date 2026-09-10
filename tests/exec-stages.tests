@@ -1,4 +1,6 @@
 # Pin simple-command stage assumptions a naive Rack/C refactor will break.
+# Named C waists: rash_stage_expand_simple_words, rash_stage_resolve_simple,
+# rash_stage_dispatch_simple. Redirect apply is still inside the builtin/disk ports.
 # Upstream often does not isolate these as named contracts.
 
 : ${THIS_SH:=../bash}

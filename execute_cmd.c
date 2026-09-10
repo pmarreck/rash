@@ -196,13 +196,34 @@ static int execute_connection (COMMAND *, int, int, int, struct fd_bitmap *);
 static int execute_intern_function (WORD_DESC *, FUNCTION_DEF *);
 
 /* Future Rack/`cmd` migration (§7A): named stages for simple commands.
-   Expand is extracted first; redirect/dispatch remain in
-   execute_builtin_or_function / execute_disk_command until a later waist. */
+   Expand, resolve, and dispatch are extracted; redirect apply remains in
+   execute_builtin_or_function / execute_disk_command. */
 static WORD_LIST *rash_stage_expand_simple_words (SIMPLE_COM *, int,
 						  struct fd_bitmap *);
 static void rash_stage_resolve_simple (WORD_LIST **, int *,
 				       sh_builtin_func_t **, SHELL_VAR **,
 				       int *);
+struct rash_simple_dispatch
+{
+  WORD_LIST *words;
+  SIMPLE_COM *simple_command;
+  sh_builtin_func_t *builtin;
+  SHELL_VAR *func;
+  struct fd_bitmap *fds_to_close;
+  char *command_line;
+  int cmdflags;
+  int already_forked;
+  int async;
+  int dofork;
+  int pipe_in;
+  int pipe_out;
+  int first_word_quoted;
+  int builtin_is_special;
+  int old_command_builtin;
+  int old_builtin;
+  int early_return;
+};
+static int rash_stage_dispatch_simple (struct rash_simple_dispatch *);
 
 /* Set to 1 if fd 0 was the subject of redirection to a subshell.  Global
    so that reader_loop can set it to zero before executing a command. */
@@ -4615,6 +4636,275 @@ rash_stage_resolve_simple (WORD_LIST **wordsp, int *cmdflagsp,
   *funcp = func;
 }
 
+/* Stage: %job / autocd retry / builtin / function / disk.
+   Redirect apply stays in execute_builtin_or_function / execute_disk_command.
+   auto_resume of a stopped job unwinds the simple-command frame and sets
+   d->early_return so the caller returns without the usual cleanup. */
+static int
+rash_stage_dispatch_simple (struct rash_simple_dispatch *d)
+{
+  WORD_LIST *words;
+  SIMPLE_COM *simple_command;
+  sh_builtin_func_t *builtin;
+  SHELL_VAR *func;
+  struct fd_bitmap *fds_to_close;
+  char *command_line, *temp;
+  int cmdflags, already_forked, async, dofork;
+  int pipe_in, pipe_out, first_word_quoted, builtin_is_special;
+  int old_command_builtin, result;
+  volatile int old_builtin;
+  int skip_dispatch, retry_as_builtin, run_disk, dispatch_done, skip_autocd;
+
+  words = d->words;
+  simple_command = d->simple_command;
+  builtin = d->builtin;
+  func = d->func;
+  fds_to_close = d->fds_to_close;
+  command_line = d->command_line;
+  cmdflags = d->cmdflags;
+  already_forked = d->already_forked;
+  async = d->async;
+  dofork = d->dofork;
+  pipe_in = d->pipe_in;
+  pipe_out = d->pipe_out;
+  first_word_quoted = d->first_word_quoted;
+  builtin_is_special = d->builtin_is_special;
+  old_command_builtin = d->old_command_builtin;
+  result = EXECUTION_SUCCESS;
+  d->early_return = 0;
+
+  skip_dispatch = 0;
+  retry_as_builtin = 1;
+  run_disk = 0;
+  dispatch_done = 0;
+  skip_autocd = 0;
+
+#if defined (JOB_CONTROL)
+  /* Is this command a job control related thing? */
+  if (words->word->word[0] == '%' && already_forked == 0)
+    {
+      this_command_name = async ? "bg" : "fg";
+      last_shell_builtin = this_shell_builtin;
+      this_shell_builtin = builtin_address (this_command_name);
+      result = (*this_shell_builtin) (words);
+      skip_dispatch = 1;
+    }
+
+  /* One other possibililty.  The user may want to resume an existing job.
+     If they do, find out whether this word is a candidate for a running
+     job. */
+  else if (job_control && already_forked == 0 && async == 0 &&
+	!first_word_quoted &&
+	!words->next &&
+	words->word->word[0] &&
+	!simple_command->redirects &&
+	pipe_in == NO_PIPE &&
+	pipe_out == NO_PIPE &&
+	(temp = get_string_value ("auto_resume")))
+    {
+      int job, jflags, started_status;
+
+      jflags = JM_STOPPED|JM_FIRSTMATCH;
+      if (STREQ (temp, "exact"))
+	jflags |= JM_EXACT;
+      else if (STREQ (temp, "substring"))
+	jflags |= JM_SUBSTRING;
+      else
+	jflags |= JM_PREFIX;
+      job = get_job_by_name (words->word->word, jflags);
+      if (job != NO_JOB)
+	{
+	  run_unwind_frame ("simple-command");
+	  this_command_name = "fg";
+	  last_shell_builtin = this_shell_builtin;
+	  this_shell_builtin = builtin_address ("fg");
+
+	  started_status = start_job (job, 1);
+	  d->early_return = 1;
+	  return ((started_status < 0) ? EXECUTION_FAILURE : started_status);
+	}
+    }
+#endif /* JOB_CONTROL */
+
+  if (skip_dispatch == 0)
+    {
+      /* unwind-protect this since we will call dispose_words on words if we run
+	 the unwind-protects. */
+      unwind_protect_string (this_command_name);
+
+      while (retry_as_builtin)
+	{
+	  retry_as_builtin = 0;
+
+	  /* Stage dispatch: builtin/function vs disk (redirect apply is inside
+	     execute_builtin_or_function / execute_disk_command). */
+	  /* Remember the name of this command globally. */
+	  this_command_name = words->word->word;
+
+	  QUIT;
+
+	  /* This command could be a shell builtin or a user-defined function.
+	     We have already found special builtins by this time, so we do not
+	     set builtin_is_special.  If this is a function or builtin, and we
+	     have pipes, then fork a subshell in here.  Otherwise, just execute
+	     the command directly. */
+	  if (func == 0 && builtin == 0)
+	    builtin = find_shell_builtin (this_command_name);
+
+	  last_shell_builtin = this_shell_builtin;
+	  this_shell_builtin = builtin;
+
+	  if (builtin || func)
+	    {
+	      if (builtin)
+		{
+		  old_builtin = executing_builtin;
+		  unwind_protect_int (executing_builtin);	/* modified in execute_builtin */
+		  if (old_command_builtin == -1)	/* sentinel, can be set above */
+		    {
+		      old_command_builtin = executing_command_builtin;
+		      unwind_protect_int (executing_command_builtin);	/* ditto and set above */
+		    }
+		}
+	      if (already_forked)
+		{
+		  reset_terminating_signals ();	/* XXX */
+		  /* Reset the signal handlers in the child, but don't free the
+		     trap strings.  Set a flag noting that we have to free the
+		     trap strings if we run trap to change a signal disposition. */
+		  reset_signal_handlers ();
+		  subshell_environment |= SUBSHELL_RESETTRAP;
+		  subshell_environment &= ~SUBSHELL_IGNTRAP;
+
+		  if (async)
+		    {
+		      if ((cmdflags & CMD_STDIN_REDIR) &&
+			    pipe_in == NO_PIPE &&
+			    (stdin_redirects (simple_command->redirects) == 0))
+			async_redirect_stdin ();
+		      setup_async_signals ();
+		    }
+
+		  if (async == 0)		/* XXX why async == 0? */
+		    subshell_level++;
+		  execute_subshell_builtin_or_function
+		    (words, simple_command->redirects, builtin, func,
+		     pipe_in, pipe_out, async, fds_to_close,
+		     cmdflags);
+		  subshell_level--;
+		}
+	      else
+		{
+		  result = execute_builtin_or_function
+		    (words, builtin, func, simple_command->redirects, fds_to_close,
+		     cmdflags);
+		  if (builtin)
+		    {
+		      if (result > EX_SHERRBASE)
+			{
+			  switch (result)
+			    {
+			    case EX_REDIRFAIL:
+			    case EX_BADASSIGN:
+			    case EX_EXPFAIL:
+			      /* These errors cause non-interactive posix mode shells to exit */
+			      if (posixly_correct && builtin_is_special && interactive_shell == 0)
+				{
+				  last_command_exit_value = EXECUTION_FAILURE;
+				  jump_to_top_level (ERREXIT);
+				}
+			      break;
+			    case EX_DISKFALLBACK:
+			      /* XXX - experimental */
+			      executing_builtin = old_builtin;
+			      executing_command_builtin = old_command_builtin;
+			      builtin = 0;
+
+			      /* The redirections have already been `undone', so this
+				 will have to do them again. But piping is forever. */
+			      pipe_in = pipe_out = -1;
+			      skip_autocd = 1;
+			      run_disk = 1;
+			      break;
+			    }
+			  if (run_disk == 0)
+			    {
+			      result = builtin_status (result);
+			      if (builtin_is_special)
+				special_builtin_failed = 1;	/* XXX - take command builtin into account? */
+			    }
+			}
+		      /* In POSIX mode, if there are assignment statements preceding
+			 a special builtin, they persist after the builtin
+			 completes. */
+		      if (run_disk == 0 && posixly_correct && builtin_is_special && temporary_env)
+			merge_temporary_env ();
+		    }
+		  else		/* function */
+		    {
+		      if (result == EX_USAGE)
+			result = EX_BADUSAGE;
+		      else if (result > EX_SHERRBASE)
+			result = builtin_status (result);
+		    }
+
+		  if (run_disk == 0)
+		    {
+		      set_pipestatus_from_exit (result);
+		      dispatch_done = 1;
+		    }
+		}
+	    }
+
+	  if (dispatch_done == 0 && run_disk == 0 && skip_autocd == 0 &&
+	      autocd && interactive && words->word && is_dirname (words->word->word))
+	    {
+	      words = make_word_list (make_word ("--"), words);
+	      words = make_word_list (make_word ("cd"), words);
+	      xtrace_print_word_list (words, 0);
+	      func = find_function ("cd");
+	      retry_as_builtin = 1;
+	    }
+	  else if (dispatch_done == 0 && run_disk == 0)
+	    run_disk = 1;
+	}
+
+      if (dispatch_done == 0 && run_disk)
+	{
+	  if (command_line == 0)
+	    command_line = savestring (the_printed_command_except_trap ? the_printed_command_except_trap : "");
+
+#if defined (PROCESS_SUBSTITUTION)
+	  /* The old code did not test already_forked and only did this if
+	     subshell_environment&SUBSHELL_COMSUB != 0 (comsubs and procsubs). Other
+	     uses of the no-fork optimization left FIFOs in $TMPDIR */
+	  if (already_forked == 0 && (cmdflags & CMD_NO_FORK) && fifos_pending () > 0)
+	    cmdflags &= ~CMD_NO_FORK;
+
+	  if (dofork && already_forked && (subshell_environment & SUBSHELL_PIPE) &&
+		(cmdflags & CMD_NO_FORK) && fifos_pending () > 0)
+#if 0
+	    cmdflags &= ~CMD_NO_FORK;
+#else
+	    ;	/* can't turn off nofork here, too many processes have the FIFOs open */
+#endif
+#endif
+	  result = execute_disk_command (words, simple_command->redirects, command_line,
+				pipe_in, pipe_out, async, fds_to_close,
+				cmdflags);
+	}
+    }
+
+  d->words = words;
+  d->builtin = builtin;
+  d->func = func;
+  d->cmdflags = cmdflags;
+  d->command_line = command_line;
+  d->old_command_builtin = old_command_builtin;
+  d->old_builtin = old_builtin;
+  return (result);
+}
+
 /* The meaty part of all the executions.  We have to start hacking the
    real execution of commands here.  Fork a process, set things up,
    execute the command. */
@@ -4622,7 +4912,7 @@ static int
 execute_simple_command (SIMPLE_COM *simple_command, int pipe_in, int pipe_out, int async, struct fd_bitmap *fds_to_close)
 {
   WORD_LIST *words, *lastword;
-  char *command_line, *lastarg, *temp;
+  char *command_line, *lastarg;
   int first_word_quoted, result, builtin_is_special, already_forked, dofork;
   int fork_flags, cmdflags;
   int capture_stdio, saved_stdout, saved_stderr, cap_out_fd, cap_err_fd;
@@ -4894,241 +5184,36 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
     ;
   lastarg = lastword->word->word;
 
-  /* Structured dispatch. Former gotos and why they existed:
-     skip_dispatch  — %job already ran fg/bg (goto return_result). Skip
-       lookup/autocd/disk; still run $_ / stdio-capture / dispose cleanup.
-     retry_as_builtin — autocd rewrote argv to `cd -- dir` (goto run_builtin).
-       Re-enter lookup once with the new words.
-     skip_autocd + run_disk — EX_DISKFALLBACK (goto execute_from_filesystem).
-       Loadable declined; redirections already undone; pipes are gone
-       (pipe_in/out = -1). Must not try autocd on the original name.
-     dispatch_done — parent builtin/function finished (goto return_result).
-       Skip autocd and disk.
-     already_forked builtin/function that returns (rare; child usually
-       exits) still falls through to autocd then disk, as before. */
   {
-    int skip_dispatch, retry_as_builtin, run_disk, dispatch_done, skip_autocd;
+    struct rash_simple_dispatch d;
 
-    skip_dispatch = 0;
-    retry_as_builtin = 1;
-    run_disk = 0;
-    dispatch_done = 0;
-    skip_autocd = 0;
-
-#if defined (JOB_CONTROL)
-  /* Is this command a job control related thing? */
-  if (words->word->word[0] == '%' && already_forked == 0)
-    {
-      this_command_name = async ? "bg" : "fg";
-      last_shell_builtin = this_shell_builtin;
-      this_shell_builtin = builtin_address (this_command_name);
-      result = (*this_shell_builtin) (words);
-      skip_dispatch = 1;
-    }
-
-  /* One other possibililty.  The user may want to resume an existing job.
-     If they do, find out whether this word is a candidate for a running
-     job. */
-  else if (job_control && already_forked == 0 && async == 0 &&
-	!first_word_quoted &&
-	!words->next &&
-	words->word->word[0] &&
-	!simple_command->redirects &&
-	pipe_in == NO_PIPE &&
-	pipe_out == NO_PIPE &&
-	(temp = get_string_value ("auto_resume")))
-    {
-      int job, jflags, started_status;
-
-      jflags = JM_STOPPED|JM_FIRSTMATCH;
-      if (STREQ (temp, "exact"))
-	jflags |= JM_EXACT;
-      else if (STREQ (temp, "substring"))
-	jflags |= JM_SUBSTRING;
-      else
-	jflags |= JM_PREFIX;
-      job = get_job_by_name (words->word->word, jflags);
-      if (job != NO_JOB)
-	{
-	  run_unwind_frame ("simple-command");
-	  this_command_name = "fg";
-	  last_shell_builtin = this_shell_builtin;
-	  this_shell_builtin = builtin_address ("fg");
-
-	  started_status = start_job (job, 1);
-	  return ((started_status < 0) ? EXECUTION_FAILURE : started_status);
-	}
-    }
-#endif /* JOB_CONTROL */
-
-    if (skip_dispatch == 0)
-      {
-  /* unwind-protect this since we will call dispose_words on words if we run
-     the unwind-protects. */
-  unwind_protect_string (this_command_name);
-
-      while (retry_as_builtin)
-	{
-	  retry_as_builtin = 0;
-
-  /* Stage dispatch: resolve builtin/function vs disk (redirect apply is inside
-     execute_builtin_or_function / execute_disk_command). */
-  /* Remember the name of this command globally. */
-  this_command_name = words->word->word;
-
-  QUIT;
-
-  /* This command could be a shell builtin or a user-defined function.
-     We have already found special builtins by this time, so we do not
-     set builtin_is_special.  If this is a function or builtin, and we
-     have pipes, then fork a subshell in here.  Otherwise, just execute
-     the command directly. */
-  if (func == 0 && builtin == 0)
-    builtin = find_shell_builtin (this_command_name);
-
-  last_shell_builtin = this_shell_builtin;
-  this_shell_builtin = builtin;
-
-  if (builtin || func)
-    {
-      if (builtin)
-        {
-	  old_builtin = executing_builtin;
-	  unwind_protect_int (executing_builtin);	/* modified in execute_builtin */
-	  if (old_command_builtin == -1)	/* sentinel, can be set above */
-	    {
-	      old_command_builtin = executing_command_builtin;
-	      unwind_protect_int (executing_command_builtin);	/* ditto and set above */
-	    }
-        }
-      if (already_forked)
-	{
-	  reset_terminating_signals ();	/* XXX */
-	  /* Reset the signal handlers in the child, but don't free the
-	     trap strings.  Set a flag noting that we have to free the
-	     trap strings if we run trap to change a signal disposition. */
-	  reset_signal_handlers ();
-	  subshell_environment |= SUBSHELL_RESETTRAP;
-	  subshell_environment &= ~SUBSHELL_IGNTRAP;
-
-	  if (async)
-	    {
-	      if ((cmdflags & CMD_STDIN_REDIR) &&
-		    pipe_in == NO_PIPE &&
-		    (stdin_redirects (simple_command->redirects) == 0))
-		async_redirect_stdin ();
-	      setup_async_signals ();
-	    }
-
-	  if (async == 0)		/* XXX why async == 0? */
-	    subshell_level++;
-	  execute_subshell_builtin_or_function
-	    (words, simple_command->redirects, builtin, func,
-	     pipe_in, pipe_out, async, fds_to_close,
-	     cmdflags);
-	  subshell_level--;
-	}
-      else
-	{
-	  result = execute_builtin_or_function
-	    (words, builtin, func, simple_command->redirects, fds_to_close,
-	     cmdflags);
-	  if (builtin)
-	    {
-	      if (result > EX_SHERRBASE)
-		{
-		  switch (result)
-		    {
-		    case EX_REDIRFAIL:
-		    case EX_BADASSIGN:
-		    case EX_EXPFAIL:
-		      /* These errors cause non-interactive posix mode shells to exit */
-		      if (posixly_correct && builtin_is_special && interactive_shell == 0)
-			{
-			  last_command_exit_value = EXECUTION_FAILURE;
-			  jump_to_top_level (ERREXIT);
-			}
-		      break;
-		    case EX_DISKFALLBACK:
-		      /* XXX - experimental */
-		      executing_builtin = old_builtin;
-		      executing_command_builtin = old_command_builtin;
-		      builtin = 0;
-
-		      /* The redirections have already been `undone', so this
-			 will have to do them again. But piping is forever. */
-		      pipe_in = pipe_out = -1;
-		      skip_autocd = 1;
-		      run_disk = 1;
-		      break;
-		    }
-		  if (run_disk == 0)
-		    {
-		      result = builtin_status (result);
-		      if (builtin_is_special)
-			special_builtin_failed = 1;	/* XXX - take command builtin into account? */
-		    }
-		}
-	      /* In POSIX mode, if there are assignment statements preceding
-		 a special builtin, they persist after the builtin
-		 completes. */
-	      if (run_disk == 0 && posixly_correct && builtin_is_special && temporary_env)
-		merge_temporary_env ();
-	    }
-	  else		/* function */
-	    {
-	      if (result == EX_USAGE)
-		result = EX_BADUSAGE;
-	      else if (result > EX_SHERRBASE)
-		result = builtin_status (result);
-	    }
-
-	  if (run_disk == 0)
-	    {
-	      set_pipestatus_from_exit (result);
-	      dispatch_done = 1;
-	    }
-	}
-    }
-
-	  if (dispatch_done == 0 && run_disk == 0 && skip_autocd == 0 &&
-	      autocd && interactive && words->word && is_dirname (words->word->word))
-	    {
-	      words = make_word_list (make_word ("--"), words);
-	      words = make_word_list (make_word ("cd"), words);
-	      xtrace_print_word_list (words, 0);
-	      func = find_function ("cd");
-	      retry_as_builtin = 1;
-	    }
-	  else if (dispatch_done == 0 && run_disk == 0)
-	    run_disk = 1;
-	}
-
-      if (dispatch_done == 0 && run_disk)
-	{
-  if (command_line == 0)
-    command_line = savestring (the_printed_command_except_trap ? the_printed_command_except_trap : "");
-
-#if defined (PROCESS_SUBSTITUTION)
-  /* The old code did not test already_forked and only did this if
-     subshell_environment&SUBSHELL_COMSUB != 0 (comsubs and procsubs). Other
-     uses of the no-fork optimization left FIFOs in $TMPDIR */
-  if (already_forked == 0 && (cmdflags & CMD_NO_FORK) && fifos_pending () > 0)
-    cmdflags &= ~CMD_NO_FORK;
-
-  if (dofork && already_forked && (subshell_environment & SUBSHELL_PIPE) &&
-	(cmdflags & CMD_NO_FORK) && fifos_pending () > 0)
-#if 0
-    cmdflags &= ~CMD_NO_FORK;
-#else
-    ;	/* can't turn off nofork here, too many processes have the FIFOs open */
-#endif
-#endif
-  result = execute_disk_command (words, simple_command->redirects, command_line,
-			pipe_in, pipe_out, async, fds_to_close,
-			cmdflags);
-	}
-      }
+    d.words = words;
+    d.simple_command = simple_command;
+    d.builtin = builtin;
+    d.func = func;
+    d.fds_to_close = fds_to_close;
+    d.command_line = command_line;
+    d.cmdflags = cmdflags;
+    d.already_forked = already_forked;
+    d.async = async;
+    d.dofork = dofork;
+    d.pipe_in = pipe_in;
+    d.pipe_out = pipe_out;
+    d.first_word_quoted = first_word_quoted;
+    d.builtin_is_special = builtin_is_special;
+    d.old_command_builtin = old_command_builtin;
+    d.old_builtin = 0;
+    d.early_return = 0;
+    result = rash_stage_dispatch_simple (&d);
+    if (d.early_return)
+      return (result);
+    words = d.words;
+    builtin = d.builtin;
+    func = d.func;
+    command_line = d.command_line;
+    cmdflags = d.cmdflags;
+    old_command_builtin = d.old_command_builtin;
+    old_builtin = d.old_builtin;
   }
 
   bind_lastarg (lastarg);
