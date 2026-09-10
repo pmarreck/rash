@@ -195,6 +195,12 @@ static int execute_connection (COMMAND *, int, int, int, struct fd_bitmap *);
 
 static int execute_intern_function (WORD_DESC *, FUNCTION_DEF *);
 
+/* Future Rack/`cmd` migration (§7A): named stages for simple commands.
+   Expand is extracted first; redirect/dispatch remain in
+   execute_builtin_or_function / execute_disk_command until a later waist. */
+static WORD_LIST *rash_stage_expand_simple_words (SIMPLE_COM *, int,
+						  struct fd_bitmap *);
+
 /* Set to 1 if fd 0 was the subject of redirection to a subshell.  Global
    so that reader_loop can set it to zero before executing a command. */
 int stdin_redir;
@@ -4497,6 +4503,35 @@ is_dirname (char *pathname)
   return ret;
 }
 
+/* Stage: word expansion for a simple command (or copy if inhibited).
+   Preserves assignment-word / arrayref fixes and comsub errexit passthrough. */
+static WORD_LIST *
+rash_stage_expand_simple_words (SIMPLE_COM *simple_command, int cmdflags,
+				struct fd_bitmap *fds_to_close)
+{
+  WORD_LIST *words;
+
+  if ((cmdflags & CMD_INHIBIT_EXPANSION) == 0)
+    {
+      current_fds_to_close = fds_to_close;
+      fix_assignment_words (simple_command->words);
+#if defined (ARRAY_VARS)
+      fix_arrayref_words (simple_command->words);
+#endif
+      /* Pass the ignore return flag down to command substitutions */
+      if (cmdflags & CMD_IGNORE_RETURN)	/* XXX */
+	comsub_ignore_return++;
+      words = expand_words (simple_command->words);
+      if (cmdflags & CMD_IGNORE_RETURN)
+	comsub_ignore_return--;
+      current_fds_to_close = (struct fd_bitmap *)NULL;
+    }
+  else
+    words = copy_word_list (simple_command->words);
+
+  return words;
+}
+
 /* The meaty part of all the executions.  We have to start hacking the
    real execution of commands here.  Fork a process, set things up,
    execute the command. */
@@ -4642,25 +4677,8 @@ execute_simple_command (SIMPLE_COM *simple_command, int pipe_in, int pipe_out, i
 
   QUIT;		/* XXX */
 
-  /* If we are re-running this as the result of executing the `command'
-     builtin, do not expand the command words a second time. */
-  if ((cmdflags & CMD_INHIBIT_EXPANSION) == 0)
-    {
-      current_fds_to_close = fds_to_close;
-      fix_assignment_words (simple_command->words);
-#if defined (ARRAY_VARS)
-      fix_arrayref_words (simple_command->words);
-#endif
-      /* Pass the ignore return flag down to command substitutions */
-      if (cmdflags & CMD_IGNORE_RETURN)	/* XXX */
-	comsub_ignore_return++;
-      words = expand_words (simple_command->words);
-      if (cmdflags & CMD_IGNORE_RETURN)
-	comsub_ignore_return--;
-      current_fds_to_close = (struct fd_bitmap *)NULL;
-    }
-  else
-    words = copy_word_list (simple_command->words);
+  /* Stage expand: (command builtin may set CMD_INHIBIT_EXPANSION). */
+  words = rash_stage_expand_simple_words (simple_command, cmdflags, fds_to_close);
 
   /* It is possible for WORDS not to have anything left in it.
      Perhaps all the words consisted of `$foo', and there was
@@ -4894,6 +4912,8 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
   unwind_protect_string (this_command_name);
 
 run_builtin:
+  /* Stage dispatch: resolve builtin/function vs disk (redirect apply is inside
+     execute_builtin_or_function / execute_disk_command). */
   /* Remember the name of this command globally. */
   this_command_name = words->word->word;
 

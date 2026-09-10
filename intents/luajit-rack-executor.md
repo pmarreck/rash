@@ -345,6 +345,19 @@ signal-adjacent code in C indefinitely.
 That keeps the interim tractable: each crossover is a **narrow waist**, not a
 vague “Lua owns more now.”
 
+### 7A.11 C prep landed (2026-09-10, pre-Lua)
+
+Light extraction toward future stages **without** a C Rack registry:
+
+- `rash_stage_expand_simple_words()` in `execute_cmd.c` — expand waist callable
+- Comments mark dispatch stage; redirect still inside builtin/disk helpers
+- Rash regression pin: `tests/exec-stages.*` (fork-before-expand, expand-before-
+  dispatch, redir-fail + `set -e`, null expand, function/builtin/disk,
+  `command` bypass, lastpipe)
+
+Further C extraction (redirect/dispatch as separate functions) waits on green
+suite after this waist and explicit go-ahead.
+
 ---
 
 ## 8. Hard problems (unchanged physics)

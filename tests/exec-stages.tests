@@ -1,0 +1,61 @@
+# Pin simple-command stage assumptions a naive Rack/C refactor will break.
+# Upstream often does not isolate these as named contracts.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-exec-stages.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+# --- expand before dispatch: argv sees expanded value ---
+out=$(${THIS_SH} --norc --noprofile -c 'X=expanded-value; printf %s "$X"')
+echo "expand-before-dispatch: $( [ "$out" = "expanded-value" ] && echo yes || echo no )"
+
+# --- assign-prefix does NOT leak to parent on a pipeline (fork-before-expand) ---
+out=$(${THIS_SH} --norc --noprofile -c 'A=frompipe true | true; printf %s "${A-UNSET}"')
+echo "pipe assign-prefix parent unset: $( [ "$out" = "UNSET" ] && echo yes || echo no )"
+
+# --- assign-prefix DOES apply for a simple (non-pipe) special builtin in posix... 
+#     For a normal external, temporary env applies to that command only:
+out=$(${THIS_SH} --norc --noprofile -c 'B=temp env | grep ^B=; printf %s "|${B-UNSET}"')
+echo "simple assign-prefix temporary: $(contains "$out" "B=temp")"
+echo "simple assign-prefix parent clean: $(contains "$out" "|UNSET")"
+
+# --- redirect failure prevents &&-chained body (no marker) ---
+rm -f "$tmp/marker"
+${THIS_SH} --norc --noprofile -c \
+	'echo hi > /no/such/dir/definitely-missing && printf body > "$1"' \
+	rash-t "$tmp/marker" 2>/dev/null
+echo "redir-fail blocks && body: $( [ -f "$tmp/marker" ] && echo no || echo yes )"
+
+# --- with set -e, failed redirect stops the script before later commands ---
+rm -f "$tmp/marker"
+${THIS_SH} --norc --noprofile -c \
+	'set -e; echo hi > /no/such/dir/definitely-missing; printf body > "$1"' \
+	rash-t "$tmp/marker" 2>/dev/null
+echo "redir-fail set -e stops script: $( [ -f "$tmp/marker" ] && echo no || echo yes )"
+
+# --- empty expand yields null command success (no crash) ---
+status=$(${THIS_SH} --norc --noprofile -c 'e=; $e; printf ok')
+echo "empty-expand null command: $( [ "$status" = "ok" ] && echo yes || echo no )"
+
+# --- function vs builtin vs disk dispatch ---
+out=$(${THIS_SH} --norc --noprofile -c 'f(){ printf FN; }; f; printf :; builtin printf BU; printf :; printf EX')
+echo "dispatch function: $(contains "$out" "FN")"
+echo "dispatch builtin: $(contains "$out" "BU")"
+echo "dispatch external: $(contains "$out" "EX")"
+
+# --- command builtin: still runs external named like a function ---
+out=$(${THIS_SH} --norc --noprofile -c 'printf(){ printf FN; }; command printf %s CMD')
+echo "command-builtin bypasses function: $( [ "$out" = "CMD" ] && echo yes || echo no )"
+
+# --- lastpipe: last stage may run in current shell when job control off ---
+out=$(${THIS_SH} --norc --noprofile -c 'set +m; shopt -s lastpipe; x=; printf a | { read x; printf %s "$x"; }; printf "|${x-U}"')
+echo "lastpipe sets parent var: $(contains "$out" "a|a")"

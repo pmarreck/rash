@@ -1,0 +1,2 @@
+${THIS_SH} ./exec-stages.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} exec-stages.right && rm -f ${BASH_TSTOUT}

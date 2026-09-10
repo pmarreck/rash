@@ -1,0 +1,12 @@
+expand-before-dispatch: yes
+pipe assign-prefix parent unset: yes
+simple assign-prefix temporary: yes
+simple assign-prefix parent clean: yes
+redir-fail blocks && body: yes
+redir-fail set -e stops script: yes
+empty-expand null command: yes
+dispatch function: yes
+dispatch builtin: yes
+dispatch external: yes
+command-builtin bypasses function: yes
+lastpipe sets parent var: yes

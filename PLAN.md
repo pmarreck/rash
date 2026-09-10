@@ -22,7 +22,8 @@
 - [x] **Lifecycle hooks batch:** `before_pipeline`, `on_exec`, `on_builtin` / `on_function`, `on_stdio_bundle` (`RASH_CAPTURE_FD`). (2026-09-09 ~18:15 EDT; `tests/lifecycle-hooks.*` green.) Skip assignment/trap seams for now (hot path / job-control risk). Curiosity poke: on_exec in pipe children runs post-fork on a copied Lua state.
 - [ ] **Safety upgrade C (follow-on):** content-hash allowlist built on landed `on_exec`.
 - [ ] **Safety upgrade D (held):** OverlayFS COW workspace launcher — Peter still thinking; do not start.
-- [ ] **Proposed direction (not accepted):** LuaJIT Rack-style executor — `intents/luajit-rack-executor.md` (§7A interim ownership/crossovers sketched 2026-09-10: phase waists, Lua vs C ownership, dual-path bans, suite canaries, spike = phase-1 identity only). Shelvable. No implementation without explicit accept.
+- [ ] **Proposed direction (not accepted):** LuaJIT Rack-style executor — `intents/luajit-rack-executor.md` (§7A). Shelvable.
+- [x] **C stage prep (waist 1):** `tests/exec-stages.*` pins fork-before-expand, expand-before-dispatch, redir+`set -e`, null expand, dispatch, `command` bypass, lastpipe; extracted `rash_stage_expand_simple_words()`; dispatch stage commented. Redirect/dispatch function extract deferred. (2026-09-10 ~11:35 EDT) Curiosity poke: next waist only after full `./test` green and explicit go-ahead.
 - [ ] **Backlog:** structured-data FDs (in/out/err) — `FUTURE_IDEAS.md`. Flesh out before scheduling; can extend `on_stdio_bundle` earlier or fall out of Lua middleware later.
 - [ ] Extend `--emit-ast` v2 only after the selected safety slice has a passing end-to-end gate: recurse through `for`, `if`, `group`, `subshell`, `case`, `function_def`, and `coproc`; emit each type's recorded line; map `W_*` bits to names. Curiosity poke: unsupported structures must never be indistinguishable from absent structures.
 

@@ -32,6 +32,7 @@ annotate=[
 	tests/cli/bm = Deterministic CLI contract test for the benchmark runner.
 	tests/clobber-undo.right = Expected output for clobber-undo.tests
 	tests/clobber-undo.tests = Safety B: on_redirect/on_clobber/snapshot/undo_last acceptance
+	tests/exec-stages.tests = Pin simple-command stage contracts for C/Rack migration
 	tests/hooks.right = Expected output for lifecycle-hook regression tests.
 	tests/hooks.tests = Lifecycle-hook regression cases for admission, reload modes, and builtin gating.
 	tests/installer-approval.tests = Classifier set for download-to-shell intercept
