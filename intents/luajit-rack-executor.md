@@ -130,7 +130,7 @@ Each phase: `./test` / `run-all` green (or an explicit divergence decision).
 | Phase | Deliverable |
 |---|---|
 | 0 | Spec accepted or shelved |
-| 1 | Outer Rack: `rash.exec(cmd)` whose default `next` = today’s C execute | identity |
+| 1 | Outer Rack: `rash.exec(cmd)` whose default `next` = today’s C execute (identity) |
 | 2 | Dispatch via ports (builtin/function/disk) |
 | 3 | Expand port / partial Lua expand |
 | 4 | Redirect port |
@@ -140,6 +140,11 @@ Each phase: `./test` / `run-all` green (or an explicit divergence decision).
 
 Structured FDs are **not** gated on this rewrite (see `FUTURE_IDEAS.md`); they
 become easier *after* phase 5+, but can be prototyped earlier on current seams.
+
+**Effort calibration (Peter 2026-09-10):** “multi-month” is **human** calendar.
+For an AI pair on this repo the same arc is closer to **multi-day** wall-clock
+(suite farming still dominates). Do not use human-month estimates to talk
+ourselves out of an accepted direction — use suite green / phase gates instead.
 
 ---
 
@@ -166,7 +171,9 @@ bashism oracle. LuaJIT speed does not shrink the suite.
 ## 10. Decision rule
 
 **Accept** only with explicit prioritization over nearer shipping work and
-acceptance of multi-month suite-bound migration starting at phase 1 identity.
+acceptance of a **suite-bound** migration starting at phase 1 identity
+(human: months; AI pair: on the order of **days** of wall-clock — still
+gated by `run-all`, not by vibes).
 
 **Otherwise** keep this as north star; continue sensors/ports + backlog
 structured FDs.
