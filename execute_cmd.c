@@ -200,6 +200,9 @@ static int execute_intern_function (WORD_DESC *, FUNCTION_DEF *);
    execute_builtin_or_function / execute_disk_command until a later waist. */
 static WORD_LIST *rash_stage_expand_simple_words (SIMPLE_COM *, int,
 						  struct fd_bitmap *);
+static void rash_stage_resolve_simple (WORD_LIST **, int *,
+				       sh_builtin_func_t **, SHELL_VAR **,
+				       int *);
 
 /* Set to 1 if fd 0 was the subject of redirection to a subshell.  Global
    so that reader_loop can set it to zero before executing a command. */
@@ -4532,6 +4535,76 @@ rash_stage_expand_simple_words (SIMPLE_COM *simple_command, int cmdflags,
   return words;
 }
 
+/* Stage: resolve special-builtin vs function vs later regular-builtin/disk.
+   May strip `command` prefixes and set CMD_COMMAND_BUILTIN / CMD_NO_FUNCTIONS.
+   Redirect apply is not here — it lives in the builtin/disk ports. */
+static void
+rash_stage_resolve_simple (WORD_LIST **wordsp, int *cmdflagsp,
+			   sh_builtin_func_t **builtinp, SHELL_VAR **funcp,
+			   int *builtin_is_specialp)
+{
+  WORD_LIST *words;
+  int cmdflags;
+  sh_builtin_func_t *builtin;
+  SHELL_VAR *func;
+
+  words = *wordsp;
+  cmdflags = *cmdflagsp;
+  builtin = (sh_builtin_func_t *)NULL;
+  func = (SHELL_VAR *)NULL;
+  *builtin_is_specialp = 0;
+
+  if ((cmdflags & CMD_NO_FUNCTIONS) == 0)
+    {
+      /* Posix.2 says special builtins are found before functions. */
+      if (posixly_correct)
+	{
+	  builtin = find_special_builtin (words->word->word);
+	  if (builtin)
+	    *builtin_is_specialp = 1;
+	}
+      if (builtin == 0)
+#if 0	/*TAG bash-5.4 rob@landley.net 5/1/2025 */
+	func = ((shell_compatibility_level <= 52 && posixly_correct == 0) || absolute_program (words->word->word) == 0) ? find_function (words->word->word) : 0;
+#else
+	func = (posixly_correct == 0 || absolute_program (words->word->word) == 0) ? find_function (words->word->word) : 0;
+#endif
+    }
+
+  if (builtin == 0 && func == 0)
+    {
+      WORD_LIST *disposer, *l;
+      int cmdtype;
+
+      builtin = find_shell_builtin (words->word->word);
+      while (builtin == command_builtin)
+	{
+	  disposer = words;
+	  cmdtype = 0;
+	  words = check_command_builtin (words, &cmdtype);
+	  if (cmdtype > 0)	/* command -p [--] words */
+	    {
+	      for (l = disposer; l->next != words; l = l->next)
+		;
+	      l->next = 0;
+	      dispose_words (disposer);
+	      cmdflags |= CMD_COMMAND_BUILTIN | CMD_NO_FUNCTIONS;
+	      if (cmdtype == 2)
+		cmdflags |= CMD_STDPATH;
+	      builtin = find_shell_builtin (words->word->word);
+	    }
+	  else
+	    break;
+	}
+      builtin = 0;
+    }
+
+  *wordsp = words;
+  *cmdflagsp = cmdflags;
+  *builtinp = builtin;
+  *funcp = func;
+}
+
 /* The meaty part of all the executions.  We have to start hacking the
    real execution of commands here.  Fork a process, set things up,
    execute the command. */
@@ -4766,31 +4839,11 @@ execute_simple_command (SIMPLE_COM *simple_command, int pipe_in, int pipe_out, i
 
   builtin = (sh_builtin_func_t *)NULL;
   func = (SHELL_VAR *)NULL;
+  builtin_is_special = 0;
+  old_command_builtin = -1;
 
-  /* This test is still here in case we want to change the command builtin
-     handler code below to recursively call execute_simple_command (after
-     modifying the simple_command struct). */
-  if ((cmdflags & CMD_NO_FUNCTIONS) == 0)
-    {
-      /* Posix.2 says special builtins are found before functions.  We
-	 don't set builtin_is_special anywhere other than here, because
-	 this path is followed only when the `command' builtin is *not*
-	 being used, and we don't want to exit the shell if a special
-	 builtin executed with `command builtin' fails.  `command' is not
-	 a special builtin. */
-      if (posixly_correct)
-	{
-	  builtin = find_special_builtin (words->word->word);
-	  if (builtin)
-	    builtin_is_special = 1;
-	}
-      if (builtin == 0)
-#if 0	/*TAG bash-5.4 rob@landley.net 5/1/2025 */
-	func = ((shell_compatibility_level <= 52 && posixly_correct == 0) || absolute_program (words->word->word) == 0) ? find_function (words->word->word) : 0;
-#else
-	func = (posixly_correct == 0 || absolute_program (words->word->word) == 0) ? find_function (words->word->word) : 0;
-#endif
-    }
+  rash_stage_resolve_simple (&words, &cmdflags, &builtin, &func,
+			     &builtin_is_special);
 
   /* What happens in posix mode when an assignment preceding a command name
      fails.  This should agree with the code in execute_cmd.c:
@@ -4816,41 +4869,11 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
     }
   tempenv_assign_error = 0;	/* don't care about this any more */
 
-  /* This is where we handle the command builtin as a pseudo-reserved word
-     prefix. This allows us to optimize away forks if we can. */
-  old_command_builtin = -1;
-  if (builtin == 0 && func == 0)
+  if (cmdflags & CMD_COMMAND_BUILTIN)
     {
-      WORD_LIST *disposer, *l;
-      int cmdtype;
-
-      builtin = find_shell_builtin (words->word->word);
-      while (builtin == command_builtin)
-	{
-	  disposer = words;
-	  cmdtype = 0;
-	  words = check_command_builtin (words, &cmdtype);
-	  if (cmdtype > 0)	/* command -p [--] words */
-	    {
-	      for (l = disposer; l->next != words; l = l->next)
-		;
-	      l->next = 0;
-	      dispose_words (disposer);
-	      cmdflags |= CMD_COMMAND_BUILTIN | CMD_NO_FUNCTIONS;
-	      if (cmdtype == 2)
-		cmdflags |= CMD_STDPATH;
-	      builtin = find_shell_builtin (words->word->word);
-	    }
-	  else
-	    break;
-	}
-      if (cmdflags & CMD_COMMAND_BUILTIN)
-	{
-	  old_command_builtin = executing_command_builtin;
-	  unwind_protect_int (executing_command_builtin);
-	  executing_command_builtin |= 1;
-	}        
-      builtin = 0;
+      old_command_builtin = executing_command_builtin;
+      unwind_protect_int (executing_command_builtin);
+      executing_command_builtin |= 1;
     }
 
   add_unwind_protect (uw_dispose_words, words);

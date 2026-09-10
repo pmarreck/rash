@@ -10,3 +10,7 @@ dispatch builtin: yes
 dispatch external: yes
 command-builtin bypasses function: yes
 lastpipe sets parent var: yes
+posix special-builtin assign persists: yes
+posix regular-builtin assign does not persist: yes
+function shadows regular builtin: yes
+command reaches builtin true: yes

@@ -24,6 +24,7 @@
 - [ ] **Safety upgrade D (held):** OverlayFS COW workspace launcher — Peter still thinking; do not start.
 - [ ] **Proposed direction (not accepted):** LuaJIT Rack-style executor — `intents/luajit-rack-executor.md` (§7A). Shelvable.
 - [x] **C stage prep (waist 1):** `tests/exec-stages.*` pins fork-before-expand, expand-before-dispatch, redir+`set -e`, null expand, dispatch, `command` bypass, lastpipe; extracted `rash_stage_expand_simple_words()`; dispatch stage commented. Redirect/dispatch function extract deferred. (2026-09-10 ~11:35 EDT) Curiosity poke: next waist only after full `./test` green and explicit go-ahead.
+- [x] **C stage prep (waist 2):** `rash_stage_resolve_simple()` extracts special-builtin vs function vs `command` prefix stripping; extra pins for POSIX assign persistence and function-shadowing regular builtins. Redirect apply stays in builtin/disk ports. (2026-09-10 ~14:40 EDT)
 - [ ] **Backlog:** structured-data FDs (in/out/err) — `FUTURE_IDEAS.md`. Flesh out before scheduling; can extend `on_stdio_bundle` earlier or fall out of Lua middleware later.
 - [ ] Extend `--emit-ast` v2 only after the selected safety slice has a passing end-to-end gate: recurse through `for`, `if`, `group`, `subshell`, `case`, `function_def`, and `coproc`; emit each type's recorded line; map `W_*` bits to names. Curiosity poke: unsupported structures must never be indistinguishable from absent structures.
 

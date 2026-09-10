@@ -349,14 +349,13 @@ vague “Lua owns more now.”
 
 Light extraction toward future stages **without** a C Rack registry:
 
-- `rash_stage_expand_simple_words()` in `execute_cmd.c` — expand waist callable
-- Comments mark dispatch stage; redirect still inside builtin/disk helpers
-- Rash regression pin: `tests/exec-stages.*` (fork-before-expand, expand-before-
-  dispatch, redir-fail + `set -e`, null expand, function/builtin/disk,
-  `command` bypass, lastpipe)
+- `rash_stage_expand_simple_words()` — expand waist
+- `rash_stage_resolve_simple()` — special-builtin / function / `command` prefix
+- Comments mark dispatch; redirect still inside builtin/disk **ports**
+- Pins: `tests/exec-stages.*` (+ POSIX assign persist, function shadows builtin)
 
-Further C extraction (redirect/dispatch as separate functions) waits on green
-suite after this waist and explicit go-ahead.
+Further extract of the goto-heavy dispatch body waits; it is already two
+callees (`execute_builtin_or_function`, `execute_disk_command`).
 
 ---
 

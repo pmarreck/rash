@@ -59,3 +59,16 @@ echo "command-builtin bypasses function: $( [ "$out" = "CMD" ] && echo yes || ec
 # --- lastpipe: last stage may run in current shell when job control off ---
 out=$(${THIS_SH} --norc --noprofile -c 'set +m; shopt -s lastpipe; x=; printf a | { read x; printf %s "$x"; }; printf "|${x-U}"')
 echo "lastpipe sets parent var: $(contains "$out" "a|a")"
+
+# --- POSIX: assignment before special builtin persists in the parent ---
+out=$(${THIS_SH} --norc --noprofile -c 'set -o posix; unset P; P=persist :; printf %s "${P-UNSET}"')
+echo "posix special-builtin assign persists: $( [ "$out" = "persist" ] && echo yes || echo no )"
+
+# --- POSIX: assignment before regular builtin does NOT persist ---
+out=$(${THIS_SH} --norc --noprofile -c 'set -o posix; unset Q; Q=temp true; printf %s "${Q-UNSET}"')
+echo "posix regular-builtin assign does not persist: $( [ "$out" = "UNSET" ] && echo yes || echo no )"
+
+# --- function shadows a regular builtin; `command` still reaches the builtin ---
+out=$(${THIS_SH} --norc --noprofile -c 'true(){ printf FN; }; true; printf :; command true; printf OK')
+echo "function shadows regular builtin: $(contains "$out" "FN")"
+echo "command reaches builtin true: $(contains "$out" "OK")"
