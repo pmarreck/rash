@@ -22,6 +22,8 @@
 - [x] **Lifecycle hooks batch:** `before_pipeline`, `on_exec`, `on_builtin` / `on_function`, `on_stdio_bundle` (`RASH_CAPTURE_FD`). (2026-09-09 ~18:15 EDT; `tests/lifecycle-hooks.*` green.) Skip assignment/trap seams for now (hot path / job-control risk). Curiosity poke: on_exec in pipe children runs post-fork on a copied Lua state.
 - [ ] **Safety upgrade C (follow-on):** content-hash allowlist built on landed `on_exec`.
 - [ ] **Safety upgrade D (held):** OverlayFS COW workspace launcher — Peter still thinking; do not start.
+- [ ] **Proposed direction (not accepted):** LuaJIT Rack-style executor — `intents/luajit-rack-executor.md` (refined 2026-09-10: lifecycle object named **`cmd`** not `env`; root-blessed mutable stack + userland read-only via copy physics; fork stays a C port; **100%** suite compatibility unless physically impossible). No implementation without explicit accept. Curiosity poke: payoff is zero-marshalling middleware later — not a prerequisite for nearer features.
+- [ ] **Backlog:** structured-data FDs (in/out/err) — `FUTURE_IDEAS.md`. Flesh out before scheduling; can extend `on_stdio_bundle` earlier or fall out of Lua middleware later.
 - [ ] Extend `--emit-ast` v2 only after the selected safety slice has a passing end-to-end gate: recurse through `for`, `if`, `group`, `subshell`, `case`, `function_def`, and `coproc`; emit each type's recorded line; map `W_*` bits to names. Curiosity poke: unsupported structures must never be indistinguishable from absent structures.
 
 - [x] Mirror the canonical GNU Bash repository to `pmarreck/rash`, retaining Savannah as the fetch-only `upstream` remote. (2026-07-21 11:15 EDT)
