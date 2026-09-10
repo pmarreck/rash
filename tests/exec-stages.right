@@ -14,3 +14,11 @@ posix special-builtin assign persists: yes
 posix regular-builtin assign does not persist: yes
 function shadows regular builtin: yes
 command reaches builtin true: yes
+percent-job is fg builtin: yes
+percent-job is not disk: yes
+unknown command not found: yes
+unknown command disk status 127: yes
+pipeline builtin already_forked: yes
+case match: yes
+case nomatch: yes
+case fallthrough: yes

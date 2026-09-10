@@ -352,9 +352,14 @@ Light extraction toward future stages **without** a C Rack registry:
 - `rash_stage_expand_simple_words()` — expand waist
 - `rash_stage_resolve_simple()` — special-builtin / function / `command` prefix
 - Comments mark dispatch; redirect still inside builtin/disk **ports**
-- Pins: `tests/exec-stages.*` (+ POSIX assign persist, function shadows builtin)
+- Pins: `tests/exec-stages.*` (+ POSIX assign persist, function shadows builtin,
+  `%job` vs disk, unknown-command 127, pipeline builtin, case match/;&)
+- Dispatch/case/disk in `execute_cmd.c` no longer use `goto`. Flags replace
+  `%job` skip, autocd retry, `EX_DISKFALLBACK`, and cleanup; `leave_case`
+  replaces `EXIT_CASE` (outer `break` required); restricted `/` shares parent
+  cleanup sequentially instead of `parent_return`.
 
-Further extract of the goto-heavy dispatch body waits; it is already two
+Further extract of the dispatch body is optional; it is already two
 callees (`execute_builtin_or_function`, `execute_disk_command`).
 
 ---

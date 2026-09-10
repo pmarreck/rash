@@ -72,3 +72,26 @@ echo "posix regular-builtin assign does not persist: $( [ "$out" = "UNSET" ] && 
 out=$(${THIS_SH} --norc --noprofile -c 'true(){ printf FN; }; true; printf :; command true; printf OK')
 echo "function shadows regular builtin: $(contains "$out" "FN")"
 echo "command reaches builtin true: $(contains "$out" "OK")"
+
+# --- %word is the fg/bg builtin, never a disk lookup (was goto return_result) ---
+${THIS_SH} --norc --noprofile -c '%99' >"$tmp/pctout" 2>"$tmp/pcterr"
+echo "percent-job is fg builtin: $(contains "$(cat "$tmp/pcterr")" "fg:")"
+echo "percent-job is not disk: $( [ "$(contains "$(cat "$tmp/pcterr")" "command not found")" = no ] && echo yes || echo no )"
+
+# --- unknown name is disk stage 127, not a silent builtin miss ---
+${THIS_SH} --norc --noprofile -c 'rash_no_such_cmd_xyz' >/dev/null 2>"$tmp/nf"
+nfstatus=$(${THIS_SH} --norc --noprofile -c 'rash_no_such_cmd_xyz' >/dev/null 2>&1; echo $?)
+echo "unknown command not found: $(contains "$(cat "$tmp/nf")" "command not found")"
+echo "unknown command disk status 127: $( [ "$nfstatus" = 127 ] && echo yes || echo no )"
+
+# --- pipeline builtin uses the already-forked dispatch (must not skip cleanup) ---
+out=$(${THIS_SH} --norc --noprofile -c 'printf %s PIPE | cat')
+echo "pipeline builtin already_forked: $( [ "$out" = "PIPE" ] && echo yes || echo no )"
+
+# --- case match vs nomatch vs ;& fallthrough (was EXIT_CASE goto) ---
+out=$(${THIS_SH} --norc --noprofile -c 'case x in y) echo Y;; x) echo X;; esac')
+echo "case match: $( [ "$out" = "X" ] && echo yes || echo no )"
+out=$(${THIS_SH} --norc --noprofile -c 'case z in y) echo Y;; x) echo X;; esac; echo Z')
+echo "case nomatch: $( [ "$out" = "Z" ] && echo yes || echo no )"
+out=$(${THIS_SH} --norc --noprofile -c 'case foo in bar) echo skip ;; foo) printf F ;& bax) printf T ;; esac')
+echo "case fallthrough: $( [ "$out" = "FT" ] && echo yes || echo no )"

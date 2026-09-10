@@ -3692,7 +3692,7 @@ execute_case_command (CASE_COM *case_command)
   WORD_LIST *wlist, *es;
   PATTERN_LIST *clauses;
   char *word, *pattern;
-  int retval, match, ignore_return, save_line_number, qflags;
+  int retval, match, ignore_return, save_line_number, qflags, leave_case;
 
   save_line_number = line_number;
   line_number = case_command->line;
@@ -3747,8 +3747,11 @@ execute_case_command (CASE_COM *case_command)
   add_unwind_protect (xfree, word);
   add_unwind_protect (uw_restore_lineno, (void *) (intptr_t) save_line_number);
 
-#define EXIT_CASE()  goto exit_case_command
-
+  /* leave_case replaces EXIT_CASE goto: leave both pattern and clause
+     loops after a match that is not ;;& (CASEPAT_TESTNEXT). The goto
+     skipped the outer for-increment; a structured break must do the
+     same, because ;& fallthrough may have already set clauses to NULL. */
+  leave_case = 0;
   for (clauses = case_command->clauses; clauses; clauses = clauses->next)
     {
       QUIT;
@@ -3797,16 +3800,23 @@ execute_case_command (CASE_COM *case_command)
 		}
 	      while ((clauses->flags & CASEPAT_FALLTHROUGH) && (clauses = clauses->next));
 	      if (clauses == 0 || (clauses->flags & CASEPAT_TESTNEXT) == 0)
-		EXIT_CASE ();
+		leave_case = 1;
 	      else
 		break;
 	    }
 
+	  if (leave_case)
+	    break;
+
 	  QUIT;
 	}
+      /* break the outer loop too: a for-increment of clauses->next after
+	 ;& fallthrough has already set clauses to NULL is a NULL deref
+	 (the old EXIT_CASE goto skipped that increment). */
+      if (leave_case)
+	break;
     }
 
-exit_case_command:
   free (word);
   discard_unwind_frame ("case");
   line_number = save_line_number;
@@ -4884,6 +4894,27 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
     ;
   lastarg = lastword->word->word;
 
+  /* Structured dispatch. Former gotos and why they existed:
+     skip_dispatch  — %job already ran fg/bg (goto return_result). Skip
+       lookup/autocd/disk; still run $_ / stdio-capture / dispose cleanup.
+     retry_as_builtin — autocd rewrote argv to `cd -- dir` (goto run_builtin).
+       Re-enter lookup once with the new words.
+     skip_autocd + run_disk — EX_DISKFALLBACK (goto execute_from_filesystem).
+       Loadable declined; redirections already undone; pipes are gone
+       (pipe_in/out = -1). Must not try autocd on the original name.
+     dispatch_done — parent builtin/function finished (goto return_result).
+       Skip autocd and disk.
+     already_forked builtin/function that returns (rare; child usually
+       exits) still falls through to autocd then disk, as before. */
+  {
+    int skip_dispatch, retry_as_builtin, run_disk, dispatch_done, skip_autocd;
+
+    skip_dispatch = 0;
+    retry_as_builtin = 1;
+    run_disk = 0;
+    dispatch_done = 0;
+    skip_autocd = 0;
+
 #if defined (JOB_CONTROL)
   /* Is this command a job control related thing? */
   if (words->word->word[0] == '%' && already_forked == 0)
@@ -4892,13 +4923,13 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
       last_shell_builtin = this_shell_builtin;
       this_shell_builtin = builtin_address (this_command_name);
       result = (*this_shell_builtin) (words);
-      goto return_result;
+      skip_dispatch = 1;
     }
 
   /* One other possibililty.  The user may want to resume an existing job.
      If they do, find out whether this word is a candidate for a running
      job. */
-  if (job_control && already_forked == 0 && async == 0 &&
+  else if (job_control && already_forked == 0 && async == 0 &&
 	!first_word_quoted &&
 	!words->next &&
 	words->word->word[0] &&
@@ -4930,11 +4961,16 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
     }
 #endif /* JOB_CONTROL */
 
+    if (skip_dispatch == 0)
+      {
   /* unwind-protect this since we will call dispose_words on words if we run
      the unwind-protects. */
   unwind_protect_string (this_command_name);
 
-run_builtin:
+      while (retry_as_builtin)
+	{
+	  retry_as_builtin = 0;
+
   /* Stage dispatch: resolve builtin/function vs disk (redirect apply is inside
      execute_builtin_or_function / execute_disk_command). */
   /* Remember the name of this command globally. */
@@ -5022,16 +5058,21 @@ run_builtin:
 		      /* The redirections have already been `undone', so this
 			 will have to do them again. But piping is forever. */
 		      pipe_in = pipe_out = -1;
-		      goto execute_from_filesystem;
+		      skip_autocd = 1;
+		      run_disk = 1;
+		      break;
 		    }
-		  result = builtin_status (result);
-		  if (builtin_is_special)
-		    special_builtin_failed = 1;	/* XXX - take command builtin into account? */
+		  if (run_disk == 0)
+		    {
+		      result = builtin_status (result);
+		      if (builtin_is_special)
+			special_builtin_failed = 1;	/* XXX - take command builtin into account? */
+		    }
 		}
 	      /* In POSIX mode, if there are assignment statements preceding
 		 a special builtin, they persist after the builtin
 		 completes. */
-	      if (posixly_correct && builtin_is_special && temporary_env)
+	      if (run_disk == 0 && posixly_correct && builtin_is_special && temporary_env)
 		merge_temporary_env ();
 	    }
 	  else		/* function */
@@ -5042,22 +5083,29 @@ run_builtin:
 		result = builtin_status (result);
 	    }
 
-	  set_pipestatus_from_exit (result);
-
-	  goto return_result;
+	  if (run_disk == 0)
+	    {
+	      set_pipestatus_from_exit (result);
+	      dispatch_done = 1;
+	    }
 	}
     }
 
-  if (autocd && interactive && words->word && is_dirname (words->word->word))
-    {
-      words = make_word_list (make_word ("--"), words);
-      words = make_word_list (make_word ("cd"), words);
-      xtrace_print_word_list (words, 0);
-      func = find_function ("cd");
-      goto run_builtin;
-    }
+	  if (dispatch_done == 0 && run_disk == 0 && skip_autocd == 0 &&
+	      autocd && interactive && words->word && is_dirname (words->word->word))
+	    {
+	      words = make_word_list (make_word ("--"), words);
+	      words = make_word_list (make_word ("cd"), words);
+	      xtrace_print_word_list (words, 0);
+	      func = find_function ("cd");
+	      retry_as_builtin = 1;
+	    }
+	  else if (dispatch_done == 0 && run_disk == 0)
+	    run_disk = 1;
+	}
 
-execute_from_filesystem:
+      if (dispatch_done == 0 && run_disk)
+	{
   if (command_line == 0)
     command_line = savestring (the_printed_command_except_trap ? the_printed_command_except_trap : "");
 
@@ -5079,8 +5127,10 @@ execute_from_filesystem:
   result = execute_disk_command (words, simple_command->redirects, command_line,
 			pipe_in, pipe_out, async, fds_to_close,
 			cmdflags);
+	}
+      }
+  }
 
- return_result:
   bind_lastarg (lastarg);
   FREE (command_line);
   if (capture_stdio)
@@ -6018,11 +6068,12 @@ execute_disk_command (WORD_LIST *words, REDIRECT *redirects, char *command_line,
          process or a context in which it's safe to call exit(2).  */
       if (nofork && pipe_in == NO_PIPE && pipe_out == NO_PIPE)
 	exit (last_command_exit_value);
-      else
-	goto parent_return;
+      /* else: former goto parent_return — skip search/fork/execve and
+	 share the parent close_pipes / FREE(command) / return path. */
     }
+  else
 #endif /* RESTRICTED_SHELL */
-
+    {
   /* If we want to change this so `command -p' (CMD_STDPATH) does not insert
      any pathname it finds into the hash table, it should read
      command = search_for_command (pathname, stdpath ? CMDSRCH_STDPATH : CMDSRCH_HASH);
@@ -6152,22 +6203,20 @@ execute_disk_command (WORD_LIST *words, REDIRECT *redirects, char *command_line,
       args = strvec_from_word_list (words, 0, 0, (int *)NULL);
       exit (shell_execve (command, args, export_env));
     }
-  else
-    {
-parent_return:
-      QUIT;
+    }
 
-      /* Make sure that the pipes are closed in the parent. */
-      close_pipes (pipe_in, pipe_out);
+  QUIT;
+
+  /* Make sure that the pipes are closed in the parent. */
+  close_pipes (pipe_in, pipe_out);
 #if 0
 #if defined (PROCESS_SUBSTITUTION) && defined (HAVE_DEV_FD)
-      if (variable_context == 0)
-        unlink_fifo_list ();
+  if (variable_context == 0)
+    unlink_fifo_list ();
 #endif
 #endif
-      FREE (command);
-      return (result);
-    }
+  FREE (command);
+  return (result);
 }
 
 /* CPP defines to decide whether a particular index into the #! line
