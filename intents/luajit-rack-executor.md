@@ -360,9 +360,11 @@ Light extraction toward future stages **without** a C Rack registry:
   cleanup sequentially instead of `parent_return`.
 - `rash_stage_dispatch_simple()` — named waist over that flag machine
   (`struct rash_simple_dispatch` is a parameter cluster, not a Rack `cmd`).
-
-Redirect apply remains inside `execute_builtin_or_function` /
-`execute_disk_command`.
+- `rash_stage_apply_simple_redirects()` — redirect **port** (parent undoable vs
+  child permanent). Not a pre-dispatch stage: builtins restore fds after;
+  disk applies in the child after fork. `on_redirect` / `on_clobber` stay
+  inside `do_redirections`. Compound-command and null-command apply still
+  call `do_redirections` directly.
 
 ---
 

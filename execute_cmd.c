@@ -196,8 +196,9 @@ static int execute_connection (COMMAND *, int, int, int, struct fd_bitmap *);
 static int execute_intern_function (WORD_DESC *, FUNCTION_DEF *);
 
 /* Future Rack/`cmd` migration (§7A): named stages for simple commands.
-   Expand, resolve, and dispatch are extracted; redirect apply remains in
-   execute_builtin_or_function / execute_disk_command. */
+   Expand, resolve, dispatch, and simple redirect-apply are extracted.
+   Redirect apply is a port (parent undoable vs child permanent), not a
+   pre-dispatch stage. Sensors stay inside do_redirections. */
 static WORD_LIST *rash_stage_expand_simple_words (SIMPLE_COM *, int,
 						  struct fd_bitmap *);
 static void rash_stage_resolve_simple (WORD_LIST **, int *,
@@ -224,6 +225,7 @@ struct rash_simple_dispatch
   int early_return;
 };
 static int rash_stage_dispatch_simple (struct rash_simple_dispatch *);
+static int rash_stage_apply_simple_redirects (REDIRECT *, int);
 
 /* Set to 1 if fd 0 was the subject of redirection to a subshell.  Global
    so that reader_loop can set it to zero before executing a command. */
@@ -5876,7 +5878,7 @@ execute_subshell_builtin_or_function (WORD_LIST *words, REDIRECT *redirects,
 
   do_piping (pipe_in, pipe_out);
 
-  if (do_redirections (redirects, RX_ACTIVE) != 0)
+  if (rash_stage_apply_simple_redirects (redirects, 0) != 0)
     exit (EXECUTION_FAILURE);
 
   if (builtin)
@@ -5929,6 +5931,28 @@ execute_subshell_builtin_or_function (WORD_LIST *words, REDIRECT *redirects,
     }
 }
 
+/* Apply a simple command's redirect list.
+   undoable != 0: parent builtin/function (RX_ACTIVE|RX_UNDOABLE). Failure
+   undoes partial redirects and returns EX_REDIRFAIL.
+   undoable == 0: child disk/subshell (RX_ACTIVE). Failure returns
+   EXECUTION_FAILURE; caller exits. Sensors stay in do_redirections. */
+static int
+rash_stage_apply_simple_redirects (REDIRECT *redirects, int undoable)
+{
+  int r;
+
+  r = do_redirections (redirects, undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
+  if (r == 0)
+    return (0);
+  if (undoable)
+    {
+      undo_partial_redirects ();
+      dispose_exec_redirects ();
+      return (EX_REDIRFAIL);
+    }
+  return (EXECUTION_FAILURE);
+}
+
 /* Execute a builtin or function in the current shell context.  If BUILTIN
    is non-null, it is the builtin command to execute, otherwise VAR points
    to the body of a function.  WORDS are the command's arguments, REDIRECTS
@@ -5960,10 +5984,8 @@ execute_builtin_or_function (WORD_LIST *words,
     add_unwind_protect (xfree, ofifo_list);
 #endif
 
-  if (do_redirections (redirects, RX_ACTIVE|RX_UNDOABLE) != 0)
+  if (rash_stage_apply_simple_redirects (redirects, 1) != 0)
     {
-      undo_partial_redirects ();
-      dispose_exec_redirects ();
 #if defined (PROCESS_SUBSTITUTION)
       free (ofifo_list);
 #endif
@@ -6239,7 +6261,7 @@ execute_disk_command (WORD_LIST *words, REDIRECT *redirects, char *command_line,
 
       /* reset shell_pgrp to pipeline_pgrp here for word expansions performed
          by the redirections here? */
-      if (redirects && (do_redirections (redirects, RX_ACTIVE) != 0))
+      if (rash_stage_apply_simple_redirects (redirects, 0) != 0)
 	{
 #if defined (PROCESS_SUBSTITUTION)
 	  /* Try to remove named pipes that may have been created as the

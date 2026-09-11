@@ -22,3 +22,11 @@ pipeline builtin already_forked: yes
 case match: yes
 case nomatch: yes
 case fallthrough: yes
+builtin redir wrote file: yes
+builtin redir undone for next: yes
+disk redir wrote file: yes
+disk redir does not steal parent stdout: yes
+function redir wrote file: yes
+function redir undone for next: yes
+exec redir persists: yes
+null command creates redir target: yes

@@ -1,6 +1,8 @@
 # Pin simple-command stage assumptions a naive Rack/C refactor will break.
 # Named C waists: rash_stage_expand_simple_words, rash_stage_resolve_simple,
-# rash_stage_dispatch_simple. Redirect apply is still inside the builtin/disk ports.
+# rash_stage_dispatch_simple, rash_stage_apply_simple_redirects.
+# Redirect apply is a port (parent undoable vs child permanent), not a
+# pre-dispatch stage. Sensors stay inside do_redirections.
 # Upstream often does not isolate these as named contracts.
 
 : ${THIS_SH:=../bash}
@@ -97,3 +99,26 @@ out=$(${THIS_SH} --norc --noprofile -c 'case z in y) echo Y;; x) echo X;; esac; 
 echo "case nomatch: $( [ "$out" = "Z" ] && echo yes || echo no )"
 out=$(${THIS_SH} --norc --noprofile -c 'case foo in bar) echo skip ;; foo) printf F ;& bax) printf T ;; esac')
 echo "case fallthrough: $( [ "$out" = "FT" ] && echo yes || echo no )"
+
+# --- builtin redirect applies, then undoes so the next command sees the old fds ---
+out=$(${THIS_SH} --norc --noprofile -c 'printf BU > "$1"; printf AFTER' rash-t "$tmp/bu")
+echo "builtin redir wrote file: $( [ "$(cat "$tmp/bu")" = "BU" ] && echo yes || echo no )"
+echo "builtin redir undone for next: $( [ "$out" = "AFTER" ] && echo yes || echo no )"
+
+# --- disk redirect applies in the child (cat is not a builtin) ---
+out=$(${THIS_SH} --norc --noprofile -c 'printf DISK | cat > "$1"; printf AFTER' rash-t "$tmp/disk")
+echo "disk redir wrote file: $( [ "$(cat "$tmp/disk")" = "DISK" ] && echo yes || echo no )"
+echo "disk redir does not steal parent stdout: $( [ "$out" = "AFTER" ] && echo yes || echo no )"
+
+# --- function redirect is the parent undoable path ---
+out=$(${THIS_SH} --norc --noprofile -c 'f(){ printf FN; }; f > "$1"; printf AFTER' rash-t "$tmp/fn")
+echo "function redir wrote file: $( [ "$(cat "$tmp/fn")" = "FN" ] && echo yes || echo no )"
+echo "function redir undone for next: $( [ "$out" = "AFTER" ] && echo yes || echo no )"
+
+# --- exec builtin keeps the redirect (no undo) ---
+${THIS_SH} --norc --noprofile -c 'exec > "$1"; printf EXEC' rash-t "$tmp/ex"
+echo "exec redir persists: $( [ "$(cat "$tmp/ex")" = "EXEC" ] && echo yes || echo no )"
+
+# --- empty command still performs redirect side effects (creates the file) ---
+${THIS_SH} --norc --noprofile -c '> "$1"' rash-t "$tmp/nullr"
+echo "null command creates redir target: $( [ -f "$tmp/nullr" ] && echo yes || echo no )"
