@@ -1,35 +1,50 @@
 #!/usr/bin/env bash
 
-# Compare release-mode GCC and Zig C builds on representative Bash execution work.
+# Release-mode microbenchmarks with a logged last-3 / ±10% window.
+# Rerun is implicit acceptance of a new baseline (the failing sample is logged).
 set -u
 
 runs=10
+micro=0
 
-case "${1-}" in
-"")
-	;;
---runs)
-	if [ $# -ne 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-		printf '%s\n' 'usage: ./bm [--runs N]' >&2
+usage() {
+	printf '%s\n' 'usage: ./bm [--micro] [--runs N]'
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--micro)
+		micro=1
+		if [ "$runs" -eq 10 ]; then
+			runs=3
+		fi
+		shift
+		;;
+	--runs)
+		if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+			usage >&2
+			exit 64
+		fi
+		runs=$2
+		shift 2
+		;;
+	-h|--help)
+		usage
+		exit 0
+		;;
+	*)
+		printf 'unknown benchmark option: %s\n' "$1" >&2
 		exit 64
-	fi
-	runs=$2
-	;;
--h|--help)
-	printf '%s\n' 'usage: ./bm [--runs N]'
-	exit 0
-	;;
-*)
-	printf 'unknown benchmark option: %s\n' "$1" >&2
-	exit 64
-	;;
-esac
+		;;
+	esac
+done
 
 if [ "${RASH_BM_IN_NIX-}" != 1 ]; then
-	exec nix develop -c env RASH_BM_IN_NIX=1 "$0" "$@"
+	exec nix develop -c env RASH_BM_IN_NIX=1 "$0" ${micro:+--micro} --runs "$runs"
 fi
 
 project_dir=$(cd "$(dirname "$0")" && pwd)
+source "$project_dir/tests/benchmark/compare.bash"
 history="$project_dir/bench/results.jsonl"
 bench_dir=$(mktemp -d "${TMPDIR}/rash-bm.XXXXXX")
 
@@ -51,12 +66,14 @@ command -v hyperfine >/dev/null 2>&1 || fail 'hyperfine is unavailable in the de
 command -v jq >/dev/null 2>&1 || fail 'jq is unavailable in the development shell'
 
 nix build .#default --out-link "$bench_dir/gcc" || fail 'GCC release build failed'
-nix build .#zig --out-link "$bench_dir/zig" || fail 'Zig release build failed'
-
 gcc_bash="$bench_dir/gcc/bin/bash"
-zig_bash="$bench_dir/zig/bin/bash"
+zig_bash=
+if [ "$micro" -eq 0 ]; then
+	nix build .#zig --out-link "$bench_dir/zig" || fail 'Zig release build failed'
+	zig_bash="$bench_dir/zig/bin/bash"
+fi
 
-for candidate in "$gcc_bash" "$zig_bash"; do
+for candidate in "$gcc_bash" ${zig_bash:+"$zig_bash"}; do
 	status_output=$("$candidate" -c ':' 2>&1)
 	status=$?
 	if [ "$status" -ne 0 ]; then
@@ -69,6 +86,7 @@ done
 
 arithmetic="$project_dir/tests/benchmark/arithmetic-loop.sh"
 dispatch="$project_dir/tests/benchmark/function-dispatch.sh"
+redirect="$project_dir/tests/benchmark/simple-redirect.sh"
 
 command_for() {
 	printf '%q %q' "$1" "$2"
@@ -81,11 +99,15 @@ startup_for() {
 results_json="$bench_dir/results.json"
 hyperfine_args=(--shell=none --warmup 3 --runs "$runs" --export-json "$results_json")
 hyperfine_args+=(--command-name gcc-startup "$(startup_for "$gcc_bash")")
-hyperfine_args+=(--command-name zig-startup "$(startup_for "$zig_bash")")
 hyperfine_args+=(--command-name gcc-arithmetic "$(command_for "$gcc_bash" "$arithmetic")")
-hyperfine_args+=(--command-name zig-arithmetic "$(command_for "$zig_bash" "$arithmetic")")
 hyperfine_args+=(--command-name gcc-function-dispatch "$(command_for "$gcc_bash" "$dispatch")")
-hyperfine_args+=(--command-name zig-function-dispatch "$(command_for "$zig_bash" "$dispatch")")
+hyperfine_args+=(--command-name gcc-simple-redirect "$(command_for "$gcc_bash" "$redirect")")
+if [ "$micro" -eq 0 ]; then
+	hyperfine_args+=(--command-name zig-startup "$(startup_for "$zig_bash")")
+	hyperfine_args+=(--command-name zig-arithmetic "$(command_for "$zig_bash" "$arithmetic")")
+	hyperfine_args+=(--command-name zig-function-dispatch "$(command_for "$zig_bash" "$dispatch")")
+	hyperfine_args+=(--command-name zig-simple-redirect "$(command_for "$zig_bash" "$redirect")")
+fi
 
 hyperfine "${hyperfine_args[@]}" || fail 'hyperfine reported a benchmark command failure'
 
@@ -98,7 +120,13 @@ touch "$history"
 prior="$bench_dir/prior.jsonl"
 cp "$history" "$prior"
 
-machine=$(uname -srm)
+os=$(uname -s)
+arch=$(uname -m)
+cpu=unknown
+if [ -r /proc/cpuinfo ]; then
+	cpu=$(awk -F: '/^model name/ { sub(/^ /, "", $2); print $2; exit }' /proc/cpuinfo)
+fi
+machine="$os $arch $cpu"
 source_revision=$(git -C "$project_dir" rev-parse HEAD)
 if ! git -C "$project_dir" diff --quiet; then
 	source_revision="$source_revision-dirty"
@@ -107,33 +135,43 @@ timestamp=$(date '+%Y-%m-%dT%H:%M:%S%z')
 zig_version=$(zig version)
 alerts=0
 
+check_metric() {
+	local name field new_value label avg pct class
+	name=$1
+	field=$2
+	new_value=$3
+	label=$4
+	# Startup is a few milliseconds; wall and user both move >10% from
+	# scheduler noise. Gate the workloads, still log startup.
+	case $name in
+	*-startup) return 0 ;;
+	esac
+	avg=$(bm_avg_last "$prior" "$name" "$machine" "$field")
+	if [ -z "$avg" ]; then
+		return 0
+	fi
+	pct=$(bm_pct_change "$avg" "$new_value") || fail "could not compare $name $label with last-$BM_WINDOW_N average"
+	class=$(bm_window_class "$pct")
+	case $class in
+	regression)
+		printf 'PERFORMANCE REGRESSION: %s %s %+s%% vs last-%s average (%s vs %s) on %s\n' \
+			"$name" "$label" "$pct" "$BM_WINDOW_N" "$new_value" "$avg" "$machine" >&2
+		alerts=1
+		;;
+	improvement)
+		printf 'PERFORMANCE IMPROVEMENT: %s %s %+s%% vs last-%s average (%s vs %s) on %s; verify the work was not skipped\n' \
+			"$name" "$label" "$pct" "$BM_WINDOW_N" "$new_value" "$avg" "$machine" >&2
+		alerts=1
+		;;
+	esac
+}
+
 while IFS= read -r result; do
 	name=$(printf '%s\n' "$result" | jq -r '.name')
 	wall_seconds=$(printf '%s\n' "$result" | jq -r '.wall_seconds')
-	baseline=$(jq -sc --arg name "$name" --arg machine "$machine" '
-		map(select(.name == $name and .machine == $machine)) | last // empty
-	' "$prior")
-	if [ -n "$baseline" ]; then
-		baseline_wall=$(printf '%s\n' "$baseline" | jq -r '.wall_seconds')
-		change=$(awk -v old="$baseline_wall" -v new="$wall_seconds" 'BEGIN {
-			if (old == 0) exit 1
-			printf "%.1f", ((new - old) / old) * 100
-		}') || fail "could not compare $name with its previous result"
-		case $(awk -v change="$change" 'BEGIN {
-			if (change >= 15) print "regression"
-			else if (change <= -15) print "improvement"
-			else print "stable"
-		}') in
-		regression)
-			printf 'PERFORMANCE REGRESSION: %s changed %+s%% from the previous %s result\n' "$name" "$change" "$machine" >&2
-			alerts=1
-			;;
-		improvement)
-			printf 'PERFORMANCE IMPROVEMENT: %s changed %+s%% from the previous %s result; verify the work was not skipped\n' "$name" "$change" "$machine" >&2
-			alerts=1
-			;;
-		esac
-	fi
+	user_seconds=$(printf '%s\n' "$result" | jq -r '.user_seconds')
+	check_metric "$name" wall_seconds "$wall_seconds" wall
+	check_metric "$name" user_seconds "$user_seconds" user-cpu
 	printf '%s\n' "$result" >> "$history"
 done < <(jq -c \
 	--arg timestamp "$timestamp" \

@@ -10,8 +10,9 @@ diversity, and a scoped reversible-mutation safety model.
 
 Rash development uses hermetic Nix commands: `./build` and `./test` use the
 GCC baseline; `./build --zig` and `./test --zig` compile the same C sources
-with pinned Zig 0.16; `./bm` compares their release-mode execution times and
-records wall-clock, user-CPU, and system-CPU history.
+with pinned Zig 0.16; `./bm` (and `./bm --micro` from `./test`) records
+wall-clock, user-CPU, and system-CPU history and fails if a result leaves a
+±10% window around the last three measurements on this machine.
 
 ## Lifecycle hooks (advisory + enforcing)
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 
-# Validate the benchmark entry point without running timing-sensitive work.
+# CLI plus the last-3 / 10% window contract. Timing-sensitive hyperfine work
+# lives in ./bm; this file keeps the gate independently falsifiable.
 set -u
 
 project_dir=$(cd "$(dirname "$0")/../.." && pwd)
 source "$HOME/dotfiles/bin/src/capture.bash"
+source "$project_dir/tests/benchmark/compare.bash"
 
 failures=0
 
@@ -20,7 +22,7 @@ capture "$project_dir/bm" --help
 if [ "$rc" -ne 0 ]; then
 	fail "--help exited $rc"
 fi
-if [ "$out" != 'usage: ./bm [--runs N]' ]; then
+if [ "$out" != 'usage: ./bm [--micro] [--runs N]' ]; then
 	fail "--help output was unexpected: $out"
 fi
 if [ -n "$err" ]; then
@@ -40,5 +42,77 @@ fi
 if [ "$err" != 'unknown benchmark option: --not-an-option' ]; then
 	fail "invalid option stderr was unexpected: $err"
 fi
+
+# --- window over last 3, two-sided 10%, per name+machine ---
+log=$(mktemp "${TMPDIR:-/tmp}/rash-bm-cmp.XXXXXX")
+machine='Linux x86_64 testhost'
+
+bm_avg_last "$log" gcc-arithmetic "$machine" wall_seconds >/dev/null
+avg=$(bm_avg_last "$log" gcc-arithmetic "$machine" wall_seconds)
+if [ -n "$avg" ]; then
+	fail "empty log should seed (no average), got $avg"
+fi
+
+{
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":1.0,"user_seconds":0.9,"machine":"Linux x86_64 testhost"}'
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":1.0,"user_seconds":0.9,"machine":"Linux x86_64 testhost"}'
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":1.0,"user_seconds":0.9,"machine":"Linux x86_64 testhost"}'
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":9.0,"user_seconds":9.0,"machine":"OtherArch"}'
+	printf '%s\n' '{"name":"zig-arithmetic","wall_seconds":9.0,"user_seconds":9.0,"machine":"Linux x86_64 testhost"}'
+} > "$log"
+
+avg=$(bm_avg_last "$log" gcc-arithmetic "$machine" wall_seconds)
+case $avg in
+1|1.0|1.00) ;;
+*) fail "last-3 wall average should ignore other name/machine, got $avg" ;;
+esac
+
+# 9% inside the window
+pct=$(bm_pct_change 1.0 1.09)
+class=$(bm_window_class "$pct")
+if [ "$class" != stable ]; then
+	fail "9% should be stable, got $class ($pct)"
+fi
+
+# 10% is the edge: window is exceeded at >= 10
+pct=$(bm_pct_change 1.0 1.10)
+class=$(bm_window_class "$pct")
+if [ "$class" != regression ]; then
+	fail "10% slower should be regression, got $class ($pct)"
+fi
+
+pct=$(bm_pct_change 1.0 1.11)
+class=$(bm_window_class "$pct")
+if [ "$class" != regression ]; then
+	fail "11% slower should be regression, got $class ($pct)"
+fi
+
+pct=$(bm_pct_change 1.0 0.89)
+class=$(bm_window_class "$pct")
+if [ "$class" != improvement ]; then
+	fail "11% faster should be improvement (two-sided), got $class ($pct)"
+fi
+
+# fewer than 3 rows: average what exists
+printf '%s\n' '{"name":"gcc-startup","wall_seconds":2.0,"user_seconds":1.0,"machine":"Linux x86_64 testhost"}' > "$log"
+printf '%s\n' '{"name":"gcc-startup","wall_seconds":4.0,"user_seconds":1.0,"machine":"Linux x86_64 testhost"}' >> "$log"
+avg=$(bm_avg_last "$log" gcc-startup "$machine" wall_seconds)
+case $avg in
+3|3.0|3.00) ;;
+*) fail "two-row average should be 3, got $avg" ;;
+esac
+
+# last 3 of 4, not the first
+{
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":100.0,"user_seconds":1.0,"machine":"Linux x86_64 testhost"}'
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":1.0,"user_seconds":1.0,"machine":"Linux x86_64 testhost"}'
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":1.0,"user_seconds":1.0,"machine":"Linux x86_64 testhost"}'
+	printf '%s\n' '{"name":"gcc-arithmetic","wall_seconds":1.0,"user_seconds":1.0,"machine":"Linux x86_64 testhost"}'
+} > "$log"
+avg=$(bm_avg_last "$log" gcc-arithmetic "$machine" wall_seconds)
+case $avg in
+1|1.0|1.00) ;;
+*) fail "average must be last 3 not all 4, got $avg" ;;
+esac
 
 exit "$failures"
