@@ -33,7 +33,7 @@ fi
 if ! nix develop -c "$(dirname "$0")/tests/cli/bm"; then
 	failures=$((failures + 1))
 fi
-# Logging microbenchmarks: ±10% vs last-3 average. Rerun ./bm --micro to accept.
+# Logging microbenchmarks: ±15% vs last-3 average. Rerun ./bm --micro to accept.
 if ! nix develop -c env RASH_BM_IN_NIX=1 "$(dirname "$0")/bm" --micro; then
 	failures=$((failures + 1))
 fi

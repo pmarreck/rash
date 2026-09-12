@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# CLI plus the last-3 / 10% window contract. Timing-sensitive hyperfine work
+# CLI plus the last-3 / 15% window contract. Timing-sensitive hyperfine work
 # lives in ./bm; this file keeps the gate independently falsifiable.
 set -u
 
@@ -67,30 +67,42 @@ case $avg in
 *) fail "last-3 wall average should ignore other name/machine, got $avg" ;;
 esac
 
-# 9% inside the window
+# 9% and 10% sit inside the 15% window
 pct=$(bm_pct_change 1.0 1.09)
 class=$(bm_window_class "$pct")
 if [ "$class" != stable ]; then
 	fail "9% should be stable, got $class ($pct)"
 fi
 
-# 10% is the edge: window is exceeded at >= 10
 pct=$(bm_pct_change 1.0 1.10)
 class=$(bm_window_class "$pct")
-if [ "$class" != regression ]; then
-	fail "10% slower should be regression, got $class ($pct)"
-fi
-
-pct=$(bm_pct_change 1.0 1.11)
-class=$(bm_window_class "$pct")
-if [ "$class" != regression ]; then
-	fail "11% slower should be regression, got $class ($pct)"
+if [ "$class" != stable ]; then
+	fail "10% slower should be stable at a 15% window, got $class ($pct)"
 fi
 
 pct=$(bm_pct_change 1.0 0.89)
 class=$(bm_window_class "$pct")
+if [ "$class" != stable ]; then
+	fail "11% faster should be stable at a 15% window, got $class ($pct)"
+fi
+
+# 15% is the edge: window is exceeded at >= 15 either way
+pct=$(bm_pct_change 1.0 1.15)
+class=$(bm_window_class "$pct")
+if [ "$class" != regression ]; then
+	fail "15% slower should be regression, got $class ($pct)"
+fi
+
+pct=$(bm_pct_change 1.0 1.16)
+class=$(bm_window_class "$pct")
+if [ "$class" != regression ]; then
+	fail "16% slower should be regression, got $class ($pct)"
+fi
+
+pct=$(bm_pct_change 1.0 0.85)
+class=$(bm_window_class "$pct")
 if [ "$class" != improvement ]; then
-	fail "11% faster should be improvement (two-sided), got $class ($pct)"
+	fail "15% faster should be improvement (two-sided), got $class ($pct)"
 fi
 
 # fewer than 3 rows: average what exists

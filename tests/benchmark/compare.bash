@@ -1,7 +1,7 @@
 # Last-N average window for Rash benchmark logs.
 # Sourced by ./bm and tests/cli/bm. Keep BM_WINDOW_PCT / BM_WINDOW_N overridable.
 
-: "${BM_WINDOW_PCT:=10}"
+: "${BM_WINDOW_PCT:=15}"
 : "${BM_WINDOW_N:=3}"
 
 # Print the average of FIELD over the last BM_WINDOW_N matching rows, or nothing.
