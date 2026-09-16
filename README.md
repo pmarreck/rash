@@ -12,7 +12,7 @@ typical failure is a plausible command that does the wrong thing
 
 Hooks are ordinary `.lua` files. Root-owned ones enforce; user-owned ones
 are advisory unless you opt in. Adding a new guard is a hook, not a C patch.
-See `HOOK_SEAMS.md` and `HOOKS_DESIGN.md`.
+Purpose: `INTENT.md`. Seams: `HOOK_SEAMS.md`. Design: `HOOKS_DESIGN.md`.
 
 Development uses hermetic Nix: `./build` and `./test` (GCC); `./build --zig`
 and `./test --zig` (same C, pinned Zig 0.16). `./bm` / `./bm --micro` log
