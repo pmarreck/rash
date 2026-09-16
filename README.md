@@ -3,16 +3,21 @@ Rash
 
 [![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Frash.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
 
-**Rash** — **R**eversible **A**uditable/**A**gent-safe **S**hell, a fork of
-Bash — is an opinionated, experimental fork of Bash 5.3. It preserves
-Bash's shell semantics while developing hermetic validation, compiler
-diversity, and a scoped reversible-mutation safety model.
+**Rash** — **R**eversible **A**uditable/**A**gent-safe **S**hell — is a fork
+of Bash 5.3. The language is still Bash. The difference is a LuaJIT hook
+layer in the executor, so policy can deny, log, approve, snapshot, or undo
+commands *before* they hit the OS. That is aimed at LLM-driven shells: the
+typical failure is a plausible command that does the wrong thing
+(`curl|bash`, clobber, `mv` onto a symlink), not a missing POSIX feature.
 
-Rash development uses hermetic Nix commands: `./build` and `./test` use the
-GCC baseline; `./build --zig` and `./test --zig` compile the same C sources
-with pinned Zig 0.16; `./bm` (and `./bm --micro` from `./test`) records
-wall-clock, user-CPU, and system-CPU history and fails if a result leaves a
-±15% window around the last three measurements on this machine.
+Hooks are ordinary `.lua` files. Root-owned ones enforce; user-owned ones
+are advisory unless you opt in. Adding a new guard is a hook, not a C patch.
+See `HOOK_SEAMS.md` and `HOOKS_DESIGN.md`.
+
+Development uses hermetic Nix: `./build` and `./test` (GCC); `./build --zig`
+and `./test --zig` (same C, pinned Zig 0.16). `./bm` / `./bm --micro` log
+wall and user-CPU and fail outside a ±15% window of the last three samples
+on this machine.
 
 ## Lifecycle hooks (advisory + enforcing)
 
@@ -73,10 +78,11 @@ that startup flag is not set.
 	RASH_HOOK_DIR="$PWD/hooks" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_RELOAD_BUILTIN=1 rash
 	$ reloadhooks
 
-Rash is a fork of Bash 5.3. It is a POSIX shell with interactive
-command-line editing, job control on architectures that support it,
-csh-like history substitution and brace expansion, and the Rash
-lifecycle-hook layer described above.
+It remains a POSIX shell: interactive editing, job control, history
+substitution, brace expansion, plus the hook layer above. Invoked as
+`bash`/`sh`/`rbash` it keeps GNU Bash `--help`/`--version` wording for
+scripts; invoked as `rash` it names itself. Issues:
+https://github.com/pmarreck/rash/issues
 
 For shell language details see `doc/bashref.info' and the Unix-style
 man page. If the info file and the man page conflict, the man page is
