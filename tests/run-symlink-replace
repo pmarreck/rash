@@ -1,0 +1,2 @@
+${THIS_SH} ./symlink-replace.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} symlink-replace.right && rm -f ${BASH_TSTOUT}

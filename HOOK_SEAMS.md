@@ -28,7 +28,7 @@ What Lua can see and must return at each lifecycle point. Companion to
 | **When** | Post-parse, **pre-expansion**, pre-exec of that command tree |
 | **Receives** | `cmd` userdata (`kind`, `words`, `redirects`, `left`/`right`/`connector` for connections); `run` closure |
 | **Words** | Unexpanded (`$FOO` stays `$FOO`). Aliases already substituted at parse. |
-| **Must / may** | Call `run()` zero or one time; may `rash.deny` before `run()`; may return exit status integer after `run()` |
+| **Must / may** | Call `run()` zero or one time; may `rash.deny` before `run()`; returning an integer (e.g. `rash.spawn` status) marks the command executed and skips the original |
 | **Good for** | Structural policy (pipelines, sudo\|tee shapes, deny-lists on literals) |
 | **Not for** | Values of variables; live pipe bytes; expanded argv |
 
@@ -110,7 +110,11 @@ See `tests/lifecycle-hooks.*` for acceptance.
 | **Where** | `shell_execve`, before `execve` |
 | **Receives** | `ctx.path`, `ctx.words` (argv) |
 | **Must / may** | May `rash.deny` → no execve, failure exit |
-| **Why** | Path/bytes allowlists (Safety C foundation) |
+| **Why** | Path/bytes allowlists (Safety C foundation); dest of `mv`/`cp`/`install` |
+
+Packaged `deny_symlink_replace.lua` uses `rash.before` + `rash.on_exec` with
+`rash.is_symlink` / `rash.is_directory` (C ports; Lua has no `io`/`os`). It
+denies when dest is a symlink that is not a directory. Override: `rash.spawn`.
 
 ### 8. `rash.on_builtin(fn)` / `rash.on_function(fn)`
 

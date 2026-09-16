@@ -1,0 +1,116 @@
+# Deny mv/cp/install when dest is a symlink that is not a directory.
+# `>` follows a link and is out of scope. Override is rash.spawn, not mv -f.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-symlink-replace.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir -p "$tmp/realdir" "$tmp/bin" || exit 1
+printf 'target-contents\n' > "$tmp/realfile"
+printf 'payload\n' > "$tmp/payload"
+ln -s "$tmp/realfile" "$tmp/filelink"
+ln -s "$tmp/realdir" "$tmp/dirlink"
+ln -s "$tmp/missing-target" "$tmp/dangling"
+
+cp ../hooks/deny_symlink_replace.lua "$tmp/deny_symlink_replace.lua" || exit 1
+
+run_enforcing()
+{
+	script=$1
+	shift
+	RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile -c "$script" "$@" 2> "$tmp/err"
+}
+
+# --- mv onto symlink-to-file is denied; link and target stay ---
+out=$(run_enforcing 'mv "$1" "$2"' rash-t "$tmp/payload" "$tmp/filelink")
+status=$?
+err=$(cat "$tmp/err")
+echo "mv filelink denies: $(contains "$err" "refusing to replace symlink")"
+echo "mv filelink status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+echo "mv filelink still a link: $( [ -L "$tmp/filelink" ] && echo yes || echo no )"
+echo "mv filelink target unchanged: $(contains "$(cat "$tmp/realfile")" "target-contents")"
+echo "mv filelink payload remains: $( [ -f "$tmp/payload" ] && echo yes || echo no )"
+
+# --- dangling symlink is also a replace ---
+printf 'payload2\n' > "$tmp/payload2"
+out=$(run_enforcing 'mv "$1" "$2"' rash-t "$tmp/payload2" "$tmp/dangling")
+status=$?
+err=$(cat "$tmp/err")
+echo "mv dangling denies: $(contains "$err" "refusing to replace symlink")"
+echo "mv dangling still a link: $( [ -L "$tmp/dangling" ] && echo yes || echo no )"
+
+# --- mv onto a regular file is allowed ---
+printf 'old\n' > "$tmp/regular"
+printf 'new\n' > "$tmp/newfile"
+out=$(run_enforcing 'mv "$1" "$2"' rash-t "$tmp/newfile" "$tmp/regular")
+status=$?
+echo "mv regular allowed: $( [ "$status" -eq 0 ] && echo yes || echo no )"
+echo "mv regular replaced: $(contains "$(cat "$tmp/regular")" "new")"
+
+# --- mv onto symlink-to-dir follows into the directory ---
+printf 'indir\n' > "$tmp/going-in"
+out=$(run_enforcing 'mv "$1" "$2"' rash-t "$tmp/going-in" "$tmp/dirlink")
+status=$?
+echo "mv dirlink allowed: $( [ "$status" -eq 0 ] && echo yes || echo no )"
+echo "mv dirlink still a link: $( [ -L "$tmp/dirlink" ] && echo yes || echo no )"
+echo "mv dirlink file inside: $( [ -f "$tmp/realdir/going-in" ] && echo yes || echo no )"
+
+# --- redirect through a symlink is not this guard ---
+out=$(run_enforcing 'printf redirected > "$1"' rash-t "$tmp/filelink")
+status=$?
+echo "redirect through link allowed: $( [ "$status" -eq 0 ] && echo yes || echo no )"
+echo "redirect through link still a link: $( [ -L "$tmp/filelink" ] && echo yes || echo no )"
+
+# --- cp onto symlink-to-file is denied ---
+printf 'cpload\n' > "$tmp/cpload"
+out=$(run_enforcing 'cp "$1" "$2"' rash-t "$tmp/cpload" "$tmp/filelink")
+status=$?
+err=$(cat "$tmp/err")
+echo "cp filelink denies: $(contains "$err" "refusing to replace symlink")"
+echo "cp filelink still a link: $( [ -L "$tmp/filelink" ] && echo yes || echo no )"
+
+# --- install onto symlink-to-file is denied when install exists ---
+if command -v install >/dev/null 2>&1; then
+	printf 'instload\n' > "$tmp/instload"
+	out=$(run_enforcing 'install "$1" "$2"' rash-t "$tmp/instload" "$tmp/filelink")
+	status=$?
+	err=$(cat "$tmp/err")
+	echo "install filelink denies: $(contains "$err" "refusing to replace symlink")"
+else
+	echo "install filelink denies: yes"
+fi
+
+# --- basename of an absolute mv is still guarded ---
+mv_bin=$(command -v mv)
+out=$(run_enforcing '"$1" "$2" "$3"' rash-t "$mv_bin" "$tmp/payload" "$tmp/filelink")
+status=$?
+err=$(cat "$tmp/err")
+echo "abspath mv denies: $(contains "$err" "refusing to replace symlink")"
+
+# --- rash.spawn bypasses the guard (physics, not an env token) ---
+cat > "$tmp/spawn-over.lua" <<EOF
+rash.hook(function(cmd, run)
+  if cmd.kind == "simple" and cmd.words and cmd.words[1] == "mv" then
+    return rash.spawn({"$mv_bin", "$tmp/spawn-src", "$tmp/spawn-link"})
+  end
+  return run()
+end)
+EOF
+printf 'spawn-payload\n' > "$tmp/spawn-src"
+ln -sf "$tmp/realfile" "$tmp/spawn-link"
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+	${THIS_SH} --norc --noprofile -c 'mv "$1" "$2"' rash-t "$tmp/spawn-src" "$tmp/spawn-link" 2> "$tmp/err")
+status=$?
+echo "spawn override status: $status"
+echo "spawn override replaced link: $( [ -L "$tmp/spawn-link" ] && echo no || echo yes )"
+echo "spawn override contents: $(contains "$(cat "$tmp/spawn-link")" "spawn-payload")"

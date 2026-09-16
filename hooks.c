@@ -170,6 +170,8 @@ static int rash_lua_approve_bytes (lua_State *);
 static int rash_lua_exec_with_stdin (lua_State *);
 static int rash_lua_snapshot_file (lua_State *);
 static int rash_lua_undo_last (lua_State *);
+static int rash_lua_is_symlink (lua_State *);
+static int rash_lua_is_directory (lua_State *);
 static int rash_lua_warn (lua_State *);
 static int rash_lua_deny (lua_State *);
 static int rash_lua_spawn (lua_State *);
@@ -887,7 +889,7 @@ rash_invoke_hook (lua_State *L, RASH_HOOK_CONTEXT *context, int index)
   runner->called = 0;
   lua_pushcclosure (L, rash_hook_run, 1);
 
-  status = rash_lua_pcall (L, 2, 0);
+  status = rash_lua_pcall (L, 2, 1);
   if (status != 0)
     {
       const char *lua_error;
@@ -906,6 +908,12 @@ rash_invoke_hook (lua_State *L, RASH_HOOK_CONTEXT *context, int index)
 			     lua_error ? lua_error : "(no error object)");
 	  lua_pop (L, 1);
 	}
+    }
+  else if (lua_isnumber (L, -1))
+    {
+      /* Returning a status from the hook replaces run() (e.g. rash.spawn). */
+      context->executed = 1;
+      context->result = (int)lua_tointeger (L, -1);
     }
   lua_settop (L, base);
   active_hook_context = 0;
@@ -970,6 +978,10 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "snapshot_file");
   lua_pushcfunction (L, rash_lua_undo_last);
   lua_setfield (L, -2, "undo_last");
+  lua_pushcfunction (L, rash_lua_is_symlink);
+  lua_setfield (L, -2, "is_symlink");
+  lua_pushcfunction (L, rash_lua_is_directory);
+  lua_setfield (L, -2, "is_directory");
   lua_pushcfunction (L, rash_lua_warn);
   lua_setfield (L, -2, "warn");
   lua_pushcfunction (L, rash_lua_deny);
@@ -1934,6 +1946,40 @@ rash_undo_next_seq (const char *dir, char *err, size_t err_len)
     }
   close (fd);
   return seq;
+}
+
+/* lstat: true only for a symlink inode, not the follow target. */
+static int
+rash_lua_is_symlink (lua_State *L)
+{
+  const char *path;
+  struct stat st;
+
+  path = luaL_checkstring (L, 1);
+  if (path[0] == '\0')
+    {
+      lua_pushboolean (L, 0);
+      return 1;
+    }
+  lua_pushboolean (L, RASH_LSTAT (path, &st) == 0 && S_ISLNK (st.st_mode));
+  return 1;
+}
+
+/* stat follows: a symlink-to-dir is a directory for mv/cp dest. */
+static int
+rash_lua_is_directory (lua_State *L)
+{
+  const char *path;
+  struct stat st;
+
+  path = luaL_checkstring (L, 1);
+  if (path[0] == '\0')
+    {
+      lua_pushboolean (L, 0);
+      return 1;
+    }
+  lua_pushboolean (L, stat (path, &st) == 0 && S_ISDIR (st.st_mode));
+  return 1;
 }
 
 static int

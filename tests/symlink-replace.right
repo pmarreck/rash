@@ -1,0 +1,21 @@
+mv filelink denies: yes
+mv filelink status nonzero: yes
+mv filelink still a link: yes
+mv filelink target unchanged: yes
+mv filelink payload remains: yes
+mv dangling denies: yes
+mv dangling still a link: yes
+mv regular allowed: yes
+mv regular replaced: yes
+mv dirlink allowed: yes
+mv dirlink still a link: yes
+mv dirlink file inside: yes
+redirect through link allowed: yes
+redirect through link still a link: yes
+cp filelink denies: yes
+cp filelink still a link: yes
+install filelink denies: yes
+abspath mv denies: yes
+spawn override status: 0
+spawn override replaced link: yes
+spawn override contents: yes

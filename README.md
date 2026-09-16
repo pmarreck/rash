@@ -21,8 +21,9 @@ under `$prefix/share/rash/hooks` are **enforcing**: they may call `rash.deny`
 and fail closed on errors. Packaged policies include `deny_sudo_tee.lua`
 (blocks `… | sudo -S tee` with an input redirect) and
 `deny_sensitive_clobber.lua` (blocks `>` onto lexical path words matching
-`.ssh/`, `id_rsa`, and similar). `warn_sudo_tee.lua` remains as an advisory
-example.
+`.ssh/`, `id_rsa`, and similar), and `deny_symlink_replace.lua` (blocks
+`mv`/`cp`/`install` onto a non-directory symlink). `warn_sudo_tee.lua` remains
+as an advisory example.
 
 Enable the installed set:
 

@@ -28,8 +28,8 @@ sides and connector, simple-command words, and redirects (`is_input`,
 | `rash.spawn({...})` | direct `fork`/`execvp`, never re-enters hooks | same |
 | hook error / skip `run()` | **fail closed** (deny) | **fail open** (continue) |
 
-Packaged hooks: `deny_sudo_tee.lua`, `deny_sensitive_clobber.lua` (plus
-`warn_sudo_tee.lua` as an advisory example). Nested `execute_command_internal`
+Packaged hooks: `deny_sudo_tee.lua`, `deny_sensitive_clobber.lua`,
+`deny_symlink_replace.lua` (plus `warn_sudo_tee.lua` as an advisory example). Nested `execute_command_internal`
 while `run()` is in progress does not re-enter hooks (`hook_execution_depth`),
 so parse-stage policy must match the **outermost** parsed command for that
 invocation.

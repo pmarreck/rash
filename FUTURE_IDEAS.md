@@ -44,6 +44,23 @@ Reserve three well-known fds (numbers TBD; must not collide with casual scripts)
 
 ---
 
+## Symlink replaced by a regular file
+
+**Status:** slice 2 shipped 2026-09-16 (`deny_symlink_replace.lua`). Remaining: expose `is_symlink` on redirect ctx (slice 1); in-process Write tools still out of scope.
+
+Agents (and some editors) “write” by creating a temp file and `rename(2)` onto the destination. That **replaces the symlink inode**. `echo x > link` does **not**: `open(2)` follows, the link stays, the target is truncated.
+
+Rash already `lstat`s in `rash_hooks_on_redirect`. A symlink is not `S_ISREG`, so `will_clobber` is false. Extending `on_clobber` would not catch the real bug.
+
+| What | Rash can see? |
+|---|---|
+| `>` / `>>` / `>|` onto a symlink | Yes, redirect sensor. Follows; link survives. |
+| `mv tmp dest` / `cp` replace / `install` | Yes if spawned through Rash (`before` / `on_exec`). |
+| Editor/agent Write via `rename` inside another process | No, unless that process is a child we exec and we wrap the tool. |
+| `ln -sf` | Yes; usually intentional. |
+
+---
+
 ## Other parked notes
 
 *(Add stubs here rather than inflating PLAN.md.)*
