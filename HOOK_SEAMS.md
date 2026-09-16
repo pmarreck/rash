@@ -29,6 +29,8 @@ What Lua can see and must return at each lifecycle point. Companion to
 | **Receives** | `cmd` userdata (`kind`, `words`, `redirects`, `left`/`right`/`connector` for connections); `run` closure |
 | **Words** | Unexpanded (`$FOO` stays `$FOO`). Aliases already substituted at parse. |
 | **Must / may** | Call `run()` zero or one time; may `rash.deny` before `run()`; returning an integer (e.g. `rash.spawn` status) marks the command executed and skips the original |
+
+`rash.use(function(cmd, next) ... end)` is Rack phase 1: outermost `execute_command` runs the blessed stack; default `next` is still `execute_command_internal`. `RASH_EXEC=c` skips it.
 | **Good for** | Structural policy (pipelines, sudo\|tee shapes, deny-lists on literals) |
 | **Not for** | Values of variables; live pipe bytes; expanded argv |
 

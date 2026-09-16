@@ -1,6 +1,7 @@
 # Threat model: command lifecycle hooks and related controls
 
-**Status:** design documentation (hooks not yet implemented)  
+**Status:** live hooks exist; this file is still the claim boundary. Hooks are a
+guard against mistakes, not a complete security backstop.  
 **Audience:** anyone writing hooks, packaging rash for agents, or describing
 what rash claims to protect  
 **Related:** `HOOKS_DESIGN.md` (hook shape and non-boundary stance),

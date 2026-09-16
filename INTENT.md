@@ -55,11 +55,11 @@ The language stays Bash. Policy is LuaJIT hooks, not a new dialect.
 - `./bm --micro` (from `./test`) and `./bm`: last-three average, two-sided 15% window, this machine.
 - Claims in `THREAT_MODEL.md` must match what hooks actually observe. Do not weaken accepted outcomes to match a missing sensor.
 
-## Open questions
+## Open questions / sequenced work
 
-- OverlayFS / COW workspace launcher: Peter still thinking (`PLAN.md` Safety D). Not accepted.
-- LuaJIT Rack-style executor (`intents/luajit-rack-executor.md`): proposed 2026-09-10, **not accepted** until explicitly prioritized. C stage extraction is prep, not the Rack rewrite.
-- Embedded LuaJIT as a general script host (`rash foo.lua`, shebang, `package.path`): possible, **not decided**. Must not be the hook VM if built.
+- **LuaJIT Rack-style executor** (`intents/luajit-rack-executor.md`): **accepted** as the next direction (Peter, 2026-09-16). C stage extraction was prep. Phase 1 is a no-op Lua `next` around outermost `execute_command`; the suite must not drift. COW waits until this exists.
+- OverlayFS / COW workspace launcher: still wanted; **do not start until Rack**. (`PLAN.md` Safety D.)
+- Embedded LuaJIT as a general script host (`rash foo.lua`, shebang, `package.path`): **tabled**. A full LuaJIT (io/os/package/FFI) would make the hook sandbox meaningless if it shared that VM.
 
 ## Links
 
@@ -70,4 +70,4 @@ The language stays Bash. Policy is LuaJIT hooks, not a new dialect.
 | `HOOKS_DESIGN.md` / `HOOK_SEAMS.md` | Hook architecture and seam contracts |
 | `THREAT_MODEL.md` | What we claim vs do not |
 | `DIVERGENCE.md` | Observable Bash differences |
-| `intents/luajit-rack-executor.md` | Proposed direction only |
+| `intents/luajit-rack-executor.md` | Accepted next direction: Rack-style executor |

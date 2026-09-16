@@ -1,8 +1,8 @@
-# Direction: LuaJIT-driven Rack-style executor (proposed)
+# Direction: LuaJIT-driven Rack-style executor
 
-**Status:** proposed — refined 2026-09-10 from Peter’s responses; still **not
-accepted for implementation** until he explicitly prioritizes it.  
-**Source:** Peter, 2026-09-10.  
+**Status:** **accepted** as the next direction (Peter, 2026-09-16). COW waits
+until this exists. LuaJIT as a general script host is tabled.  
+**Source:** Peter, 2026-09-10 (design); 2026-09-16 (prioritize).  
 **Relation to root:** Extends agent-safe / reversible shell; keeps Bash parse
 identity and GPL provenance. C becomes syscall / job-control / builtin
 **ports** under a Lua-owned middleware stack — not the place policy lives.

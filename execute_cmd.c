@@ -487,8 +487,8 @@ execute_command (COMMAND *command)
   rash_hooks_command_begin ();
   add_unwind_protect (rash_hooks_command_unwind, (char *)0);
 
-  /* Just do the command, but not asynchronously. */
-  result = execute_command_internal (command, 0, NO_PIPE, NO_PIPE, bitmap);
+  /* Outermost command: Lua Rack next() when rash.use is registered. */
+  result = rash_rack_execute (command, 0, NO_PIPE, NO_PIPE, bitmap);
 
   dispose_fd_bitmap (bitmap);
   discard_unwind_frame ("execute-command");

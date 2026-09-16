@@ -1,0 +1,6 @@
+noop stack printf: RACK
+RASH_EXEC=c printf: RACK
+noop stack true: 0
+noop stack false: 1
+RASH_EXEC=c false: 1
+noop stack two lines: yes

@@ -1,0 +1,44 @@
+# Rack phase 1: no-op Lua next around outermost execute_command.
+# Default next is still execute_command_internal. RASH_EXEC=c skips Lua.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-rack1.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+cat > "$tmp/noop.lua" <<'EOF'
+rash.use(function(cmd, nxt)
+  return nxt(cmd)
+end)
+EOF
+
+run_rack()
+{
+	RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile "$@" 2>/dev/null
+}
+
+run_c()
+{
+	RASH_EXEC=c RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile "$@" 2>/dev/null
+}
+
+out=$(run_rack -c 'printf RACK')
+echo "noop stack printf: $out"
+
+out=$(run_c -c 'printf RACK')
+echo "RASH_EXEC=c printf: $out"
+
+run_rack -c 'true'
+echo "noop stack true: $?"
+
+run_rack -c 'false'
+echo "noop stack false: $?"
+
+run_c -c 'false'
+echo "RASH_EXEC=c false: $?"
+
+out=$(run_rack -c 'printf %s\\n hi; printf %s\\n there')
+echo "noop stack two lines: $( [ "$out" = "hi
+there" ] && echo yes || echo no )"

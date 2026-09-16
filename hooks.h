@@ -8,6 +8,7 @@
 struct fd_bitmap;
 
 extern int rash_hooks_active (void);
+extern int rash_rack_execute (COMMAND *, int, int, int, struct fd_bitmap *);
 extern int rash_hooks_execute (COMMAND *, int, int, int, struct fd_bitmap *);
 /* After expand_words / alias-already-substituted argv; non-zero means deny. */
 extern int rash_hooks_before_simple (WORD_LIST *words);

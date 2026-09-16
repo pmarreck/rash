@@ -1,0 +1,2 @@
+${THIS_SH} ./rack-phase1.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} rack-phase1.right && rm -f ${BASH_TSTOUT}

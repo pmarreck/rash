@@ -10,6 +10,14 @@ commands *before* they hit the OS. That is aimed at LLM-driven shells: the
 typical failure is a plausible command that does the wrong thing
 (`curl|bash`, clobber, `mv` onto a symlink), not a missing POSIX feature.
 
+This is **not** (at least not yet) a complete security backstop. It hooks
+the common Bash footguns that both LLMs and humans repeat. A motivated
+attacker — or an LLM that simply walks around the gates (another runtime,
+`rename` in-process, a non-Rash shell) — will still get what it wants
+unless you add deeper enclosure (namespace, exec allowlist, COW workspace).
+In-process hooks are a guard against mistakes, not a boundary against
+someone who owns the process. See `INTENT.md` and `THREAT_MODEL.md`.
+
 Hooks are ordinary `.lua` files. Root-owned ones enforce; user-owned ones
 are advisory unless you opt in. Adding a new guard is a hook, not a C patch.
 Purpose: `INTENT.md`. Seams: `HOOK_SEAMS.md`. Design: `HOOKS_DESIGN.md`.

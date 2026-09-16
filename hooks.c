@@ -95,6 +95,14 @@ typedef struct {
   int called;
 } RASH_HOOK_RUNNER;
 
+typedef struct rash_rack_run {
+  COMMAND *command;
+  int asynchronous;
+  int pipe_in;
+  int pipe_out;
+  struct fd_bitmap *fds_to_close;
+} RASH_RACK_RUN;
+
 static lua_State *rash_lua;
 static lua_State *retired_lua;
 static int hook_table_ref = LUA_NOREF;
@@ -108,6 +116,7 @@ static int on_builtin_table_ref = LUA_NOREF;
 static int on_function_table_ref = LUA_NOREF;
 static int on_exec_table_ref = LUA_NOREF;
 static int stdio_bundle_table_ref = LUA_NOREF;
+static int rack_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
@@ -119,6 +128,7 @@ static int on_builtin_count;
 static int on_function_count;
 static int on_exec_count;
 static int stdio_bundle_count;
+static int rack_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
@@ -130,7 +140,9 @@ static int *on_builtin_enforcing;
 static int *on_function_enforcing;
 static int *on_exec_enforcing;
 static int *stdio_bundle_enforcing;
+static int *rack_enforcing;
 static int loading_file_enforcing;
+static int rack_depth;
 static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
@@ -172,6 +184,9 @@ static int rash_lua_snapshot_file (lua_State *);
 static int rash_lua_undo_last (lua_State *);
 static int rash_lua_is_symlink (lua_State *);
 static int rash_lua_is_directory (lua_State *);
+static int rash_lua_use (lua_State *);
+static int rash_rack_invoke (RASH_RACK_RUN *, int);
+static int rash_rack_next (lua_State *);
 static int rash_lua_warn (lua_State *);
 static int rash_lua_deny (lua_State *);
 static int rash_lua_spawn (lua_State *);
@@ -453,6 +468,13 @@ static int
 rash_lua_hook (lua_State *L)
 {
   return rash_register_callback (L, hook_table_ref, &hook_enforcing, &hook_count);
+}
+
+static int
+rash_lua_use (lua_State *L)
+{
+  /* Blessed Rack middleware: function(cmd, next) -> status. */
+  return rash_register_callback (L, rack_table_ref, &rack_enforcing, &rack_count);
 }
 
 static int
@@ -950,6 +972,8 @@ rash_lua_ready (void)
   lua_newtable (L);
   lua_pushcfunction (L, rash_lua_hook);
   lua_setfield (L, -2, "hook");
+  lua_pushcfunction (L, rash_lua_use);
+  lua_setfield (L, -2, "use");
   lua_pushcfunction (L, rash_lua_before);
   lua_setfield (L, -2, "before");
   lua_pushcfunction (L, rash_lua_after);
@@ -1017,6 +1041,9 @@ rash_lua_ready (void)
   on_exec_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   lua_newtable (L);
   stdio_bundle_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  lua_newtable (L);
+  rack_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  rack_count = 0;
   rash_lua = L;
   return 1;
 }
@@ -1339,15 +1366,15 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   hook_table_ref = before_table_ref = after_table_ref = LUA_NOREF;
   redirect_table_ref = clobber_table_ref = download_pipe_table_ref = LUA_NOREF;
   before_pipeline_table_ref = on_builtin_table_ref = on_function_table_ref = LUA_NOREF;
-  on_exec_table_ref = stdio_bundle_table_ref = LUA_NOREF;
+  on_exec_table_ref = stdio_bundle_table_ref = rack_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
   redirect_count = clobber_count = download_pipe_count = 0;
   before_pipeline_count = on_builtin_count = on_function_count = 0;
-  on_exec_count = stdio_bundle_count = 0;
+  on_exec_count = stdio_bundle_count = rack_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
   redirect_enforcing = clobber_enforcing = download_pipe_enforcing = 0;
   before_pipeline_enforcing = on_builtin_enforcing = on_function_enforcing = 0;
-  on_exec_enforcing = stdio_bundle_enforcing = 0;
+  on_exec_enforcing = stdio_bundle_enforcing = rack_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -1468,6 +1495,104 @@ rash_hooks_initialize (int force)
 	return 1;
     }
   return rash_hooks_load_configuration (directory, allow_unowned, enforce_unowned);
+}
+
+static int
+rash_rack_next (lua_State *L)
+{
+  RASH_RACK_RUN *run;
+  int index, result;
+
+  (void)L;
+  run = (RASH_RACK_RUN *)lua_touserdata (L, lua_upvalueindex (1));
+  index = (int)lua_tointeger (L, lua_upvalueindex (2));
+  if (run == 0)
+    return luaL_error (L, "rash.use next() used outside its command");
+  result = rash_rack_invoke (run, index);
+  lua_pushinteger (L, result);
+  return 1;
+}
+
+static int
+rash_rack_invoke (RASH_RACK_RUN *run, int index)
+{
+  lua_State *L;
+  int base, status, result;
+  RASH_RACK_RUN *proxy;
+
+  if (index > rack_count)
+    return execute_command_internal (run->command, run->asynchronous,
+				     run->pipe_in, run->pipe_out,
+				     run->fds_to_close);
+
+  L = rash_lua;
+  base = lua_gettop (L);
+  lua_rawgeti (L, LUA_REGISTRYINDEX, rack_table_ref);
+  lua_rawgeti (L, -1, index);
+  lua_remove (L, -2);
+  rash_push_command (L, run->command);
+  proxy = (RASH_RACK_RUN *)lua_newuserdata (L, sizeof (*proxy));
+  *proxy = *run;
+  lua_pushinteger (L, index + 1);
+  lua_pushcclosure (L, rash_rack_next, 2);
+  status = rash_lua_pcall (L, 2, 1);
+  if (status != 0)
+    {
+      const char *lua_error;
+
+      lua_error = lua_tostring (L, -1);
+      if (rack_enforcing && rack_enforcing[index - 1])
+	{
+	  rash_hook_warning ("enforcing rack layer failed; denying command: ",
+			     lua_error ? lua_error : "(no error object)");
+	  result = EXECUTION_FAILURE;
+	}
+      else
+	{
+	  rash_hook_warning ("advisory rack layer failed; running command: ",
+			     lua_error ? lua_error : "(no error object)");
+	  result = execute_command_internal (run->command, run->asynchronous,
+					     run->pipe_in, run->pipe_out,
+					     run->fds_to_close);
+	}
+    }
+  else if (lua_isnumber (L, -1))
+    result = (int)lua_tointeger (L, -1);
+  else
+    {
+      rash_hook_warning ("rack layer did not return a status; denying", 0);
+      result = EXECUTION_FAILURE;
+    }
+  lua_settop (L, base);
+  return result;
+}
+
+int
+rash_rack_execute (COMMAND *command, int asynchronous, int pipe_in, int pipe_out,
+		   struct fd_bitmap *fds_to_close)
+{
+  const char *mode;
+  RASH_RACK_RUN run;
+  int result;
+
+  mode = getenv ("RASH_EXEC");
+  if (mode && strcmp (mode, "c") == 0)
+    return execute_command_internal (command, asynchronous, pipe_in, pipe_out,
+				     fds_to_close);
+
+  if (rack_depth > 0 || rash_lua == 0 || rack_count == 0)
+    return execute_command_internal (command, asynchronous, pipe_in, pipe_out,
+				     fds_to_close);
+
+  run.command = command;
+  run.asynchronous = asynchronous;
+  run.pipe_in = pipe_in;
+  run.pipe_out = pipe_out;
+  run.fds_to_close = fds_to_close;
+  rack_depth++;
+  result = rash_rack_invoke (&run, 1);
+  rack_depth--;
+  return result;
 }
 
 void
