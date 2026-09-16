@@ -61,7 +61,7 @@ test -f "$out/share/rash/hooks/deny_sensitive_clobber.lua"
 							'';
 
 							meta = with pkgs.lib; {
-								description = "GNU Bash 5.3 patch 15, before Rash live-surface changes";
+								description = "Rash, a fork of Bash 5.3 patch 15";
 								license = licenses.gpl3Plus;
 								platforms = platforms.unix;
 							};
@@ -150,7 +150,7 @@ test -f "$out/share/rash/hooks/deny_sensitive_clobber.lua"
 							'';
 
 							meta = with pkgs.lib; {
-								description = "GNU Bash 5.3 patch 15, before Rash live-surface changes";
+								description = "Rash, a fork of Bash 5.3 patch 15";
 								license = licenses.gpl3Plus;
 								platforms = platforms.unix;
 							};

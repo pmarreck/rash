@@ -1,6 +1,6 @@
-# Rash divergences from GNU Bash
+# Rash divergences from Bash 5.3
 
-Rash is a fork of GNU Bash 5.3. Compatibility is a constraint, not an
+Rash is a fork of Bash 5.3. Compatibility is a constraint, not an
 aspiration: every place Rash behaves differently from upstream is recorded
 here, with the evidence that justified it and the test that pins it.
 
@@ -71,10 +71,8 @@ which upstream never did.
 `-n -c`, standard input, and script file — so the option is checked as a
 classifier over invocation forms rather than only the route that changed.
 
-**Upstream status.** Not yet reported. The `ONESHOT` semantic defect is
-reportable on its own terms, with no reference to Rash, and should go to
-`bug-bash@gnu.org` from a pristine clone. The stderr diagnostic is a Rash
-choice and is not part of that report. Tracked in `PLAN.md`.
+**Upstream status.** Rash-owned. We do not file reports outside this
+project. The stderr diagnostic is a Rash choice. Tracked in `PLAN.md`.
 
 ---
 

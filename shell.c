@@ -493,7 +493,7 @@ main (int argc, char **argv, char **env)
       id = shell_identity ();
       printf ("%s %s (%s) - %s\n", id, shell_version_string (), MACHTYPE,
 	      STREQ (id, "bash")
-		? _("GNU Bourne-Again SHell")
+		? _("Bourne-Again SHell")
 		: _("Reversible Auditable/Agent-safe Shell, a fork of Bash"));
       exit (EXECUTION_SUCCESS);
     }
@@ -2118,7 +2118,8 @@ show_shell_usage (FILE *fp, int extra)
   char *set_opts, *s, *t;
 
   if (extra)
-    fprintf (fp, _("GNU bash, version %s-(%s)\n"), shell_version_string (), MACHTYPE);
+    fprintf (fp, _("%s, version %s-(%s)\n"), shell_identity (),
+	     shell_version_string (), MACHTYPE);
   fprintf (fp, _("Usage:\t%s [GNU long option] [option] ...\n\t%s [GNU long option] [option] script-file ...\n"),
 	     shell_name, shell_name);
   fputs (_("GNU long options:\n"), fp);
@@ -2153,10 +2154,7 @@ show_shell_usage (FILE *fp, int extra)
     {
       fprintf (fp, _("Type `%s -c \"help set\"' for more information about shell options.\n"), shell_name);
       fprintf (fp, _("Type `%s -c help' for more information about shell builtin commands.\n"), shell_name);
-      fprintf (fp, _("Use the `bashbug' command to report bugs.\n"));
-      fprintf (fp, "\n");
-      fprintf (fp, _("bash home page: <http://www.gnu.org/software/bash>\n"));
-      fprintf (fp, _("General help using GNU software: <http://www.gnu.org/gethelp/>\n"));
+      fprintf (fp, _("Report problems at <https://github.com/pmarreck/rash/issues>\n"));
     }
 }
 

@@ -47,8 +47,8 @@ CFLAGS = @CFLAGS@
 #
 # These values are generated for configure by ${topdir}/support/shobj-conf.
 # If your system is not supported by that script, but includes facilities for
-# dynamic loading of shared objects, please update the script and send the
-# changes to bash-maintainers@gnu.org.
+# dynamic loading of shared objects, please update the script and file the
+# changes at https://github.com/pmarreck/rash/issues.
 #
 SHOBJ_CC = @SHOBJ_CC@
 SHOBJ_CFLAGS = @SHOBJ_CFLAGS@

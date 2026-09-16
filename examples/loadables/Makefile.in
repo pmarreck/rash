@@ -83,7 +83,7 @@ CCFLAGS = $(DEFS) $(LOCAL_DEFS) $(LOCAL_CFLAGS) $(CPPFLAGS) $(CFLAGS) $(STYLE_CF
 # These values are generated for configure by ${topdir}/support/shobj-conf.
 # If your system is not supported by that script, but includes facilities for
 # dynamic loading of shared objects, please update the script and send the
-# changes to bash-maintainers@gnu.org.
+# changes via https://github.com/pmarreck/rash/issues.
 #
 SHOBJ_CC = @SHOBJ_CC@
 SHOBJ_CFLAGS = @SHOBJ_CFLAGS@
@@ -119,8 +119,7 @@ unsupported:
 	@echo "If your operating system provides facilities for dynamic"
 	@echo "loading of shared objects using the dlopen(3) interface,"
 	@echo "please update the script and re-run configure."
-	@echo "Please send the changes you made to bash-maintainers@gnu.org"
-	@echo "for inclusion in future bash releases."
+	@echo "File the changes you made at https://github.com/pmarreck/rash/issues"
 
 everything: supported others
 

@@ -69,6 +69,18 @@ case $(${THIS_SH} -c 'exec -a rash "$0" --about' "$abs") in
 *)						echo "rash backronym: no" ;;
 esac
 
+# --help / --about must not send people to GNU, bashbug, or the Bash maintainer.
+help=$(${THIS_SH} --help 2>&1)
+case $help in
+*bashbug*|*"bug-bash"*|*"help-bash"*|*"gnu.org/software/bash"*|*"gnu.org/gethelp"*|*"chet.ramey"*|*"Chet Ramey"*)
+	echo "help contacts gnu: yes" ;;
+*)	echo "help contacts gnu: no" ;;
+esac
+case $(${THIS_SH} -c 'exec -a bash "$0" --about' "$abs") in
+*GNU*)	echo "about as bash names gnu: yes" ;;
+*)	echo "about as bash names gnu: no" ;;
+esac
+
 # --about reports and exits, like --version; it must not run a -c command.
 ${THIS_SH} -c 'exec -a rash "$0" --about -c "echo RAN"' "$abs" > /dev/null 2>&1
 echo "ran the -c command: $(${THIS_SH} -c 'exec -a rash "$0" --about -c "echo RAN"' "$abs" 2>/dev/null | grep -c RAN)"

@@ -10,14 +10,8 @@ programming.
 Another good source of basic information about shells is the collection
 of FAQ articles periodically posted to comp.unix.shell.
 
-Questions and comments concerning this document should be sent to
-chet.ramey@case.edu.
-
-This document is available for anonymous FTP with the URL
-
-ftp://ftp.cwru.edu/pub/bash/FAQ
-
-The Bash home page is http://cnswww.cns.cwru.edu/~chet/bash/bashtop.html
+This copy lives in Rash. File issues at
+https://github.com/pmarreck/rash/issues.
 
 ----------
 Contents:
@@ -2325,20 +2319,8 @@ Section H:  Where do I go from here?
 H1) How do I report bugs in bash, and where should I look for fixes and
     advice?
 
-Use the `bashbug' script to report bugs.  It is built and
-installed at the same time as bash.  It provides a standard
-template for reporting a problem and automatically includes
-information about your configuration and build environment. 
-
-`bashbug' sends its reports to bug-bash@gnu.org, which
-is a large mailing list gatewayed to the usenet newsgroup gnu.bash.bug. 
-
-Bug fixes, answers to questions, and announcements of new releases
-are all posted to gnu.bash.bug.  Discussions concerning bash features
-and problems also take place there.
-
-To reach the bash maintainers directly, send mail to
-bash-maintainers@gnu.org.
+File Rash issues at https://github.com/pmarreck/rash/issues.
+The installed bashbug helper does not send mail.
 
 H2) What kind of bash documentation is there?
 

@@ -42,8 +42,7 @@ A copy of the license is included in the section entitled
 @subtitle Reference Documentation for Bash
 @subtitle Edition @value{EDITION}, for @code{Bash} Version @value{VERSION}.
 @subtitle @value{UPDATED-MONTH}
-@author Chet Ramey, Case Western Reserve University
-@author Brian Fox, Free Software Foundation
+@author Rash contributors
 
 @page
 @vskip 0pt plus 1filll
@@ -59,10 +58,10 @@ A copy of the license is included in the section entitled
 
 This text is a brief description of the features that are present in
 the Bash shell (version @value{VERSION}, @value{UPDATED}).
-The Bash home page is @url{http://www.gnu.org/software/bash/}.
+Rash issues: @url{https://github.com/pmarreck/rash/issues}.
 
 This is Edition @value{EDITION}, last updated @value{UPDATED},
-of @cite{The GNU Bash Reference Manual},
+of the Rash/Bash reference manual,
 for @code{Bash}, Version @value{VERSION}.
 
 Bash contains features that appear in other popular shells, and some
@@ -93,7 +92,7 @@ reference on shell behavior.
 				editing features.
 * Using History Interactively::	Command History Expansion
 * Installing Bash::		How to build and install Bash on your system.
-* Reporting Bugs::		How to report bugs in Bash.
+* Reporting Bugs::		How to file Rash issues.
 * Major Differences From The Bourne Shell::	A terse list of the differences
 						between Bash and historical
 						versions of /bin/sh.
@@ -10327,8 +10326,7 @@ While running, it prints messages telling which features it is
 checking for.
 
 @item
-Type @samp{make} to compile Bash and build the @code{bashbug} bug
-reporting script.
+Type @samp{make} to compile Rash.
 
 @item
 Optionally, type @samp{make tests} to run the Bash test suite.
@@ -10390,11 +10388,10 @@ make
 See @ref{Compiling For Multiple Architectures} for more information
 about building in a directory separate from the source.
 
-If you need to do unusual things to compile Bash, please
+If you need to do unusual things to compile Rash, please
 try to figure out how @code{configure} could check whether or not
-to do them, and mail diffs or instructions to
-@email{bash-maintainers@@gnu.org} so they can be
-considered for the next release.
+to do them, and file the result at
+@uref{https://github.com/pmarreck/rash/issues}.
 
 The file @file{configure.ac} is used to create @code{configure}
 by a program called Autoconf.
@@ -10903,42 +10900,9 @@ information about its effect.
 @node Reporting Bugs
 @appendix Reporting Bugs
 
-Please report all bugs you find in Bash.
-But first, you should
-make sure that it really is a bug, and that it appears in the latest
-version of Bash.
-The latest released version of Bash is always available for FTP from
-@uref{ftp://ftp.gnu.org/pub/gnu/bash/} and from
-@uref{http://git.savannah.gnu.org/cgit/bash.git/snapshot/bash-master.tar.gz}.
-
-Once you have determined that a bug actually exists, use the
-@code{bashbug} command to submit a bug report or use the form at the
-@uref{https://savannah.gnu.org/projects/bash/,Bash project page}.
-If you have a fix, you are encouraged to submit that as well!
-Suggestions and `philosophical' bug reports may be mailed
-to @email{bug-bash@@gnu.org} or @email{help-bash@@gnu.org}.
-
-All bug reports should include:
-@itemize @bullet
-@item
-The version number of Bash.
-@item
-The hardware and operating system.
-@item
-The compiler used to compile Bash.
-@item
-A description of the bug behavior.
-@item
-A short script or `recipe' which exercises the bug and may be used
-to reproduce it.
-@end itemize
-
-@noindent
-@code{bashbug} inserts the first three items automatically into
-the template it provides for filing a bug report.
-
-Please send all reports concerning this manual to
-@email{bug-bash@@gnu.org}.
+This is Rash. File issues at
+@uref{https://github.com/pmarreck/rash/issues}.
+The installed @code{bashbug} command does not send mail.
 
 @node Major Differences From The Bourne Shell
 @appendix Major Differences From The Bourne Shell

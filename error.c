@@ -60,10 +60,9 @@ extern const char * const bash_badsub_errmsg;
 
 static void error_prolog (int);
 
-/* The current maintainer of the shell.  You change this in the
-   Makefile. */
+/* Issue tracker for this fork. Override with -DMAINTAINER= in the Makefile. */
 #if !defined (MAINTAINER)
-#define MAINTAINER "bash-maintainers@gnu.org"
+#define MAINTAINER "https://github.com/pmarreck/rash/issues"
 #endif
 
 const char * const the_current_maintainer = MAINTAINER;
