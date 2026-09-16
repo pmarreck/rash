@@ -349,7 +349,6 @@ static void init_noninteractive (void);
 static void init_interactive_script (void);
 
 static void set_shell_name (char *);
-static const char *shell_identity (void);
 static void shell_initialize (void);
 static void shell_reinitialize (void);
 
@@ -493,7 +492,7 @@ main (int argc, char **argv, char **env)
       id = shell_identity ();
       printf ("%s %s (%s) - %s\n", id, shell_version_string (), MACHTYPE,
 	      STREQ (id, "bash")
-		? _("Bourne-Again SHell")
+		? _("GNU Bourne-Again SHell")
 		: _("Reversible Auditable/Agent-safe Shell, a fork of Bash"));
       exit (EXECUTION_SUCCESS);
     }
@@ -1298,32 +1297,6 @@ shell_is_restricted (char *name)
   return (STREQ (temp, RESTRICTED_SHELL_NAME));
 }
 
-/* The name this shell answers to, decided from the name it was invoked under
-   in the same way `sh' and the restricted shell already are. bash's own
-   established names keep answering as bash: a caller running `bash', `sh', or
-   the restricted shell is asking for compatibility and should not be told it
-   is talking to a fork. Every other name, including one the caller invented,
-   answers as this fork. This is the escape hatch that makes renaming the
-   binary safe, so it has to be decided from argv[0] rather than from the
-   executable's path -- `exec -a' must be honored like a symlink. */
-static const char *
-shell_identity (void)
-{
-  char *temp;
-
-  temp = base_pathname (shell_name);
-  if (*temp == '-')		/* login shells arrive as `-bash' */
-    temp++;
-
-  if (STREQ (temp, "bash") || STREQ (temp, "sh"))
-    return "bash";
-#if defined (RESTRICTED_SHELL)
-  if (STREQ (temp, RESTRICTED_SHELL_NAME))
-    return "bash";
-#endif
-  return "rash";
-}
-
 /* Perhaps make this shell a `restricted' one, based on NAME.  If the
    basename of NAME is "rbash", then this shell is restricted.  The
    name of the restricted shell is a configurable option, see config.h.
@@ -2118,11 +2091,24 @@ show_shell_usage (FILE *fp, int extra)
   char *set_opts, *s, *t;
 
   if (extra)
-    fprintf (fp, _("%s, version %s-(%s)\n"), shell_identity (),
-	     shell_version_string (), MACHTYPE);
-  fprintf (fp, _("Usage:\t%s [GNU long option] [option] ...\n\t%s [GNU long option] [option] script-file ...\n"),
+    {
+      if (STREQ (shell_identity (), "bash"))
+	fprintf (fp, _("GNU bash, version %s-(%s)\n"), shell_version_string (), MACHTYPE);
+      else
+	fprintf (fp, _("Rash, version %s-(%s)\n"), shell_version_string (), MACHTYPE);
+    }
+  if (STREQ (shell_identity (), "bash"))
+    {
+      fprintf (fp, _("Usage:\t%s [GNU long option] [option] ...\n\t%s [GNU long option] [option] script-file ...\n"),
 	     shell_name, shell_name);
-  fputs (_("GNU long options:\n"), fp);
+      fputs (_("GNU long options:\n"), fp);
+    }
+  else
+    {
+      fprintf (fp, _("Usage:\t%s [long option] [option] ...\n\t%s [long option] [option] script-file ...\n"),
+	     shell_name, shell_name);
+      fputs (_("Long options:\n"), fp);
+    }
   for (i = 0; long_args[i].name; i++)
     fprintf (fp, "\t--%s\n", long_args[i].name);
 
@@ -2155,6 +2141,10 @@ show_shell_usage (FILE *fp, int extra)
       fprintf (fp, _("Type `%s -c \"help set\"' for more information about shell options.\n"), shell_name);
       fprintf (fp, _("Type `%s -c help' for more information about shell builtin commands.\n"), shell_name);
       fprintf (fp, _("Report problems at <https://github.com/pmarreck/rash/issues>\n"));
+      /* Last line on purpose: after the option list, so scripts that scrape
+	 flags from --help keep working. Transparency, not a parser token. */
+      if (STREQ (shell_identity (), "bash"))
+	fprintf (fp, _("(This executable is Rash, presenting as bash for compatibility.)\n"));
     }
 }
 

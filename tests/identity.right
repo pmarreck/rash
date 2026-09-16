@@ -14,5 +14,14 @@ carries platform: yes
 bash identity leaks the fork name: no
 rash backronym: yes
 help contacts gnu: no
-about as bash names gnu: no
+bash version GNU: yes
+rash version branded: yes
+rash version says GNU bash: no
+bash help GNU long options: yes
+rash help GNU long options: no
+bash help GNU version: yes
+rash help GNU version: no
+bash help names the fork: yes
+rash help masquerade note: no
+about as bash names gnu: yes
 ran the -c command: 0

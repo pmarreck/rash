@@ -27,6 +27,7 @@
 #endif
 
 #include <stdio.h>
+#include <string.h>
 
 #include "version.h"
 #include "patchlevel.h"
@@ -35,6 +36,36 @@
 #include "bashintl.h"
 
 extern char *shell_name;
+
+/* Same rule as the former shell.c helper: bash/sh/rbash stay bash for
+   compatibility; every other invocation name is rash. Lives here so
+   bashversion (which links this file, not shell.c) agrees. */
+const char *
+shell_identity (void)
+{
+  const char *temp;
+  const char *slash;
+
+  temp = shell_name ? shell_name : "bash";
+  slash = strrchr (temp, '/');
+  if (slash)
+    temp = slash + 1;
+#if defined (__CYGWIN__) || defined (_WIN32)
+  slash = strrchr (temp, '\\');
+  if (slash)
+    temp = slash + 1;
+#endif
+  if (*temp == '-')		/* login shells arrive as `-bash' */
+    temp++;
+
+  if (strcmp (temp, "bash") == 0 || strcmp (temp, "sh") == 0)
+    return "bash";
+#if defined (RESTRICTED_SHELL)
+  if (strcmp (temp, RESTRICTED_SHELL_NAME) == 0)
+    return "bash";
+#endif
+  return "rash";
+}
 
 /* Defines from version.h */
 const char * const dist_version = DISTVERSION;
@@ -87,7 +118,10 @@ shell_version_string (void)
 void
 show_shell_version (int extended)
 {
-  printf (_("GNU bash, version %s (%s)\n"), shell_version_string (), MACHTYPE);
+  if (strcmp (shell_identity (), "bash") == 0)
+    printf (_("GNU bash, version %s (%s)\n"), shell_version_string (), MACHTYPE);
+  else
+    printf (_("Rash, version %s (%s)\n"), shell_version_string (), MACHTYPE);
   if (extended)
     {
       printf ("%s\n", _(bash_copyright));

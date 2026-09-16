@@ -179,6 +179,7 @@ extern void xbcopy (const void *, void *, size_t);
 /* Functions from version.c. */
 extern char *shell_version_string (void);
 extern void show_shell_version (int);
+extern const char *shell_identity (void);
 
 /* Functions from the bash library, lib/sh/libsh.a.  These should really
    go into a separate include file. */

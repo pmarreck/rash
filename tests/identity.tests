@@ -69,16 +69,64 @@ case $(${THIS_SH} -c 'exec -a rash "$0" --about' "$abs") in
 *)						echo "rash backronym: no" ;;
 esac
 
-# --help / --about must not send people to GNU, bashbug, or the Bash maintainer.
+# --help / --about must not send people to GNU lists, bashbug, or the Bash maintainer.
 help=$(${THIS_SH} --help 2>&1)
 case $help in
 *bashbug*|*"bug-bash"*|*"help-bash"*|*"gnu.org/software/bash"*|*"gnu.org/gethelp"*|*"chet.ramey"*|*"Chet Ramey"*)
 	echo "help contacts gnu: yes" ;;
 *)	echo "help contacts gnu: no" ;;
 esac
+
+# bash identity uses GNU language for compatibility; rash identity does not.
+ver_bash=$(${THIS_SH} -c 'exec -a bash "$0" --version' "$abs" | sed -n '1p')
+case $ver_bash in
+"GNU bash, version"*)	echo "bash version GNU: yes" ;;
+*)			echo "bash version GNU: no" ;;
+esac
+ver_rash=$(${THIS_SH} -c 'exec -a rash "$0" --version' "$abs" | sed -n '1p')
+case $ver_rash in
+"Rash, version"*)	echo "rash version branded: yes" ;;
+*)			echo "rash version branded: no" ;;
+esac
+case $ver_rash in
+*"GNU bash"*)	echo "rash version says GNU bash: yes" ;;
+*)		echo "rash version says GNU bash: no" ;;
+esac
+
+help_bash=$(${THIS_SH} -c 'exec -a bash "$0" --help' "$abs" 2>&1)
+help_rash=$(${THIS_SH} -c 'exec -a rash "$0" --help' "$abs" 2>&1)
+case $help_bash in
+*"GNU long options"*)	echo "bash help GNU long options: yes" ;;
+*)			echo "bash help GNU long options: no" ;;
+esac
+case $help_rash in
+*"GNU long options"*)	echo "rash help GNU long options: yes" ;;
+*"Long options:"*)	echo "rash help GNU long options: no" ;;
+*)			echo "rash help GNU long options: missing" ;;
+esac
+case $help_bash in
+*"GNU bash, version"*)	echo "bash help GNU version: yes" ;;
+*)			echo "bash help GNU version: no" ;;
+esac
+case $help_rash in
+*"GNU bash, version"*)	echo "rash help GNU version: yes" ;;
+*)			echo "rash help GNU version: no" ;;
+esac
+
+# Transparency sits after the option list so parsers of --help flags still work.
+case $help_bash in
+*"presenting as bash for compatibility"*)	echo "bash help names the fork: yes" ;;
+*)						echo "bash help names the fork: no" ;;
+esac
+case $help_rash in
+*"presenting as bash for compatibility"*)	echo "rash help masquerade note: yes" ;;
+*)						echo "rash help masquerade note: no" ;;
+esac
+
+# --about as bash matches stock bash wording; as rash it uses the backronym.
 case $(${THIS_SH} -c 'exec -a bash "$0" --about' "$abs") in
-*GNU*)	echo "about as bash names gnu: yes" ;;
-*)	echo "about as bash names gnu: no" ;;
+*"GNU Bourne-Again SHell"*)	echo "about as bash names gnu: yes" ;;
+*)				echo "about as bash names gnu: no" ;;
 esac
 
 # --about reports and exits, like --version; it must not run a -c command.

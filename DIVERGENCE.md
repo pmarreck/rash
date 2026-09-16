@@ -313,10 +313,13 @@ indistinguishable from bash when something asks it what it is; a script that
 invokes `sh` is asking for compatibility and should not be told it is talking
 to a fork. The fork announces itself only when called by its own name.
 
-`--about` is also the smallest surface that makes the identity switch
-observable and therefore testable. It is a new option, so it cannot break any
-existing caller — unlike changing `--version` or `--help`, which scripts parse.
-Those stay untouched until the rename is deliberately made.
+`--about` was the first surface. `--version` and `--help` now follow the same
+identity: invoked as bash they keep GNU wording scripts already parse
+(`GNU bash, version`, `GNU long options`); invoked as rash they say
+`Rash, version` and `Long options`. When presenting as bash, `--help` adds
+one last parenthetical that this executable is Rash — after the option list,
+so flag-scrapers are not disrupted. Issues still go to the Rash tracker, not
+to GNU lists.
 
 **Implementation.** `shell_identity ()` in `shell.c` reuses the existing
 mechanism: `base_pathname` on `shell_name`, with a leading `-` stripped so a
@@ -324,8 +327,9 @@ login shell arriving as `-bash` matches. It reads argv[0] rather than the
 executable's real path, so `exec -a` is honored exactly like a symlink — the
 name the caller used is the name that governs.
 
-**POSIX.** Not implicated. A new GNU-style long option; no POSIX-specified
-behavior changes, and no existing output changes.
+**POSIX.** Not implicated. `--about` is a new long option. `--version` and
+`--help` as bash keep the GNU wording POSIX-unspecified scripts already
+parse; as rash they use Rash wording. No POSIX-specified behavior changes.
 
 **Tests.** `tests/identity.tests`, `tests/identity.right`,
 `tests/run-identity` — checked as a classifier over the set of invocation
