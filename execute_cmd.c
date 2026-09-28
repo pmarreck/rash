@@ -223,6 +223,7 @@ struct rash_simple_dispatch
   int old_command_builtin;
   int old_builtin;
   int early_return;
+  int force_disk;
 };
 static int rash_stage_dispatch_simple (struct rash_simple_dispatch *);
 static int rash_stage_apply_simple_redirects (REDIRECT *, int);
@@ -4750,7 +4751,12 @@ rash_stage_dispatch_simple (struct rash_simple_dispatch *d)
 	     set builtin_is_special.  If this is a function or builtin, and we
 	     have pipes, then fork a subshell in here.  Otherwise, just execute
 	     the command directly. */
-	  if (func == 0 && builtin == 0)
+	  if (d->force_disk)
+	    {
+	      builtin = 0;
+	      func = 0;
+	    }
+	  else if (func == 0 && builtin == 0)
 	    builtin = find_shell_builtin (this_command_name);
 
 	  last_shell_builtin = this_shell_builtin;
@@ -5206,7 +5212,31 @@ itrace("execute_simple_command: posix mode tempenv assignment error");
     d.old_command_builtin = old_command_builtin;
     d.old_builtin = 0;
     d.early_return = 0;
-    result = rash_stage_dispatch_simple (&d);
+    d.force_disk = 0;
+    {
+      int prefer_builtin;
+
+      prefer_builtin = 0;
+      if (rash_hooks_choose_dispatch (words, func != 0, builtin != 0,
+				     &d.force_disk, &prefer_builtin) != 0)
+	{
+	  result = last_command_exit_value = EXECUTION_FAILURE;
+	  set_pipestatus_from_exit (result);
+	}
+      else
+	{
+	  if (d.force_disk)
+	    {
+	      builtin = (sh_builtin_func_t *)NULL;
+	      func = (SHELL_VAR *)NULL;
+	    }
+	  else if (prefer_builtin)
+	    func = (SHELL_VAR *)NULL;
+	  d.builtin = builtin;
+	  d.func = func;
+	  result = rash_stage_dispatch_simple (&d);
+	}
+    }
     if (d.early_return)
       return (result);
     words = d.words;

@@ -117,6 +117,7 @@ static int on_function_table_ref = LUA_NOREF;
 static int on_exec_table_ref = LUA_NOREF;
 static int stdio_bundle_table_ref = LUA_NOREF;
 static int rack_table_ref = LUA_NOREF;
+static int dispatch_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
@@ -129,6 +130,7 @@ static int on_function_count;
 static int on_exec_count;
 static int stdio_bundle_count;
 static int rack_count;
+static int dispatch_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
@@ -141,6 +143,7 @@ static int *on_function_enforcing;
 static int *on_exec_enforcing;
 static int *stdio_bundle_enforcing;
 static int *rack_enforcing;
+static int *dispatch_enforcing;
 static int loading_file_enforcing;
 static int rack_depth;
 static int rack_denied;
@@ -148,6 +151,7 @@ static char rack_deny_reason[RASH_DENY_REASON_MAX];
 static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
+static int in_dispatch_stage;
 static int in_redirect_stage;
 static int in_download_pipe_stage;
 static int in_before_pipeline_stage;
@@ -188,6 +192,7 @@ static int rash_lua_is_symlink (lua_State *);
 static int rash_lua_is_directory (lua_State *);
 static int rash_lua_use (lua_State *);
 static int rash_lua_audit (lua_State *);
+static int rash_lua_on_dispatch (lua_State *);
 static int rash_rack_invoke (RASH_RACK_RUN *, int);
 static int rash_rack_next (lua_State *);
 static int rash_lua_warn (lua_State *);
@@ -474,6 +479,14 @@ rash_lua_hook (lua_State *L)
 }
 
 static int
+rash_lua_on_dispatch (lua_State *L)
+{
+  /* After expand: function(info) -> nil | "builtin" | "disk". */
+  return rash_register_callback (L, dispatch_table_ref, &dispatch_enforcing,
+				 &dispatch_count);
+}
+
+static int
 rash_lua_use (lua_State *L)
 {
   /* Blessed Rack middleware: function(cmd, next) -> status. */
@@ -612,7 +625,7 @@ rash_lua_deny (lua_State *L)
     }
 
   /* Stage sensors use stage_denied rather than parse-stage hook context. */
-  if (in_before_stage || in_redirect_stage || in_download_pipe_stage
+  if (in_before_stage || in_dispatch_stage || in_redirect_stage || in_download_pipe_stage
       || in_before_pipeline_stage || in_builtin_stage || in_function_stage
       || in_exec_stage)
     {
@@ -1015,6 +1028,8 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "hook");
   lua_pushcfunction (L, rash_lua_use);
   lua_setfield (L, -2, "use");
+  lua_pushcfunction (L, rash_lua_on_dispatch);
+  lua_setfield (L, -2, "on_dispatch");
   lua_pushcfunction (L, rash_lua_audit);
   lua_setfield (L, -2, "audit");
   lua_pushcfunction (L, rash_lua_before);
@@ -1087,6 +1102,9 @@ rash_lua_ready (void)
   lua_newtable (L);
   rack_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   rack_count = 0;
+  lua_newtable (L);
+  dispatch_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  dispatch_count = 0;
   rash_lua = L;
   return 1;
 }
@@ -1410,14 +1428,16 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   redirect_table_ref = clobber_table_ref = download_pipe_table_ref = LUA_NOREF;
   before_pipeline_table_ref = on_builtin_table_ref = on_function_table_ref = LUA_NOREF;
   on_exec_table_ref = stdio_bundle_table_ref = rack_table_ref = LUA_NOREF;
+  dispatch_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
   redirect_count = clobber_count = download_pipe_count = 0;
   before_pipeline_count = on_builtin_count = on_function_count = 0;
-  on_exec_count = stdio_bundle_count = rack_count = 0;
+  on_exec_count = stdio_bundle_count = rack_count = dispatch_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
   redirect_enforcing = clobber_enforcing = download_pipe_enforcing = 0;
   before_pipeline_enforcing = on_builtin_enforcing = on_function_enforcing = 0;
   on_exec_enforcing = stdio_bundle_enforcing = rack_enforcing = 0;
+  dispatch_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -3233,6 +3253,90 @@ rash_hooks_before_simple (WORD_LIST *words)
   in_before_stage = 0;
   current_hook_enforcing = 0;
   return stage_denied ? EXECUTION_FAILURE : 0;
+}
+
+int
+rash_hooks_choose_dispatch (WORD_LIST *words, int have_function, int have_builtin,
+			   int *force_disk, int *prefer_builtin)
+{
+  int i, base, status;
+  const char *resolved;
+
+  *force_disk = 0;
+  *prefer_builtin = 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (rash_lua == 0 || dispatch_count == 0)
+    return 0;
+
+  if (have_function)
+    resolved = "function";
+  else if (have_builtin)
+    resolved = "builtin";
+  else
+    resolved = "command";
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_dispatch_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= dispatch_count; i++)
+    {
+      const char *choice;
+
+      current_hook_enforcing = dispatch_enforcing && dispatch_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, dispatch_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      lua_newtable (rash_lua);
+      rash_push_words (rash_lua, words);
+      lua_setfield (rash_lua, -2, "words");
+      lua_pushstring (rash_lua, resolved);
+      lua_setfield (rash_lua, -2, "resolved");
+      status = rash_lua_pcall (rash_lua, 1, 1);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing dispatch hook failed; denying command: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing dispatch hook failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory dispatch hook failed; continuing: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      else if (lua_isstring (rash_lua, -1))
+	{
+	  choice = lua_tostring (rash_lua, -1);
+	  if (choice && strcmp (choice, "disk") == 0)
+	    {
+	      *force_disk = 1;
+	      *prefer_builtin = 0;
+	    }
+	  else if (choice && strcmp (choice, "builtin") == 0)
+	    {
+	      *prefer_builtin = 1;
+	      *force_disk = 0;
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_dispatch_stage = 0;
+  current_hook_enforcing = 0;
+  return stage_denied ? 1 : 0;
 }
 
 void

@@ -1,0 +1,69 @@
+# Phase 2: after expand, Lua may see the words and choose builtin vs disk.
+# No hook: C dispatch unchanged. Connections stay C; each simple still dispatches.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-rack-dispatch.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir -p "$tmp/hooks"
+cat > "$tmp/hooks/dispatch.lua" <<'EOF'
+rash.on_dispatch(function(info)
+  local words = info.words
+  local line = info.resolved
+  local i = 1
+  while words and words[i] do
+    line = line .. " " .. words[i]
+    i = i + 1
+  end
+  rash.audit(line)
+  if info.words[1] == "echo" and info.resolved == "function" then
+    return "builtin"
+  end
+  if info.words[1] == "printf" and info.words[2] == "NO" then
+    rash.deny("dispatch blocked printf")
+    return nil
+  end
+  return nil
+end)
+EOF
+
+run()
+{
+	RASH_AUDIT_LOG="$tmp/audit" RASH_HOOK_DIR="$tmp/hooks" \
+		RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile -c "$1" >"$tmp/out" 2>"$tmp/err"
+}
+
+: > "$tmp/audit"
+run 'x=ZZ; echo $x'
+echo "expanded word: $(contains "$(cat "$tmp/audit")" "echo ZZ")"
+echo "not unexpanded: $(contains "$(cat "$tmp/audit")" "echo \$x")"
+echo "echo ran: $(contains "$(cat "$tmp/out")" "ZZ")"
+
+: > "$tmp/audit"
+run 'echo one; echo two'
+audit=$(cat "$tmp/audit")
+echo "two simples: $(contains "$audit" "echo one")"
+echo "second simple: $(contains "$audit" "echo two")"
+
+: > "$tmp/audit"
+run 'printf NO'
+status=$?
+echo "deny message: $(contains "$(cat "$tmp/err")" "dispatch blocked printf")"
+echo "deny no output: $( [ -z "$(cat "$tmp/out")" ] && echo yes || echo no )"
+echo "deny status: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run 'echo() { printf FN; }; echo HI'
+echo "function overridden to builtin: $(contains "$(cat "$tmp/out")" "HI")"
+echo "function body skipped: $(contains "$(cat "$tmp/out")" "FN")"
+echo "saw function resolve: $(contains "$(cat "$tmp/audit")" "function echo HI")"

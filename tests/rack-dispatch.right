@@ -1,0 +1,11 @@
+expanded word: yes
+not unexpanded: no
+echo ran: yes
+two simples: yes
+second simple: yes
+deny message: yes
+deny no output: yes
+deny status: yes
+function overridden to builtin: yes
+function body skipped: no
+saw function resolve: yes

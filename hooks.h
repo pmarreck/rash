@@ -12,6 +12,12 @@ extern int rash_rack_execute (COMMAND *, int, int, int, struct fd_bitmap *);
 extern int rash_hooks_execute (COMMAND *, int, int, int, struct fd_bitmap *);
 /* After expand_words / alias-already-substituted argv; non-zero means deny. */
 extern int rash_hooks_before_simple (WORD_LIST *words);
+/* After resolve, before builtin/function/disk. Non-zero means deny.
+   *force_disk skips builtin and function lookup. *prefer_builtin clears a
+   function so the regular builtin runs. */
+extern int rash_hooks_choose_dispatch (WORD_LIST *words, int have_function,
+				      int have_builtin, int *force_disk,
+				      int *prefer_builtin);
 /* After a simple command finishes; optional capped stdout/stderr capture. */
 extern void rash_hooks_after_simple (WORD_LIST *words, int status,
 				    const char *captured_stdout, size_t stdout_len,
