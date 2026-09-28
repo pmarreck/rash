@@ -1,0 +1,78 @@
+# Phase 3: one expand path per command. Lua may expand only the simple
+# unquoted set ($NAME and literals). Quotes, globs, arithmetic, and
+# command substitutions stay on C even if the hook returns a word list.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-rack-expand.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir -p "$tmp/hooks" "$tmp/g"
+printf 'data\n' > "$tmp/g/ONLYONE"
+
+cat > "$tmp/hooks/expand.lua" <<'EOF'
+rash.on_expand(function(info)
+  rash.audit(info.mode)
+  if info.mode ~= "lua" then
+    return nil
+  end
+  local out = {}
+  local i = 1
+  while info.words[i] do
+    local w = info.words[i]
+    local name = string.match(w, "^%$([A-Za-z_][A-Za-z0-9_]*)$")
+    if name then
+      out[i] = (rash.shell_var(name) or "") .. "!"
+    else
+      out[i] = w
+    end
+    i = i + 1
+  end
+  return out
+end)
+EOF
+
+run()
+{
+	RASH_AUDIT_LOG="$tmp/audit" RASH_HOOK_DIR="$tmp/hooks" \
+		RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile -c "$1" >"$tmp/out" 2>"$tmp/err"
+}
+
+: > "$tmp/audit"
+run 'echo hello'
+echo "literal lua output: $( [ "$(cat "$tmp/out")" = "hello" ] && echo yes || echo no )"
+echo "literal mode lua: $(contains "$(cat "$tmp/audit")" "lua")"
+
+: > "$tmp/audit"
+run 'x=ZZ; echo $x'
+echo "dollar lua marked: $( [ "$(cat "$tmp/out")" = "ZZ!" ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run 'x=ZZ; echo "$x"'
+echo "quoted stays C: $( [ "$(cat "$tmp/out")" = "ZZ" ] && echo yes || echo no )"
+echo "quoted mode c: $(contains "$(cat "$tmp/audit")" "c")"
+
+: > "$tmp/audit"
+run 'echo $(echo CSUB)'
+echo "comsub stays C: $( [ "$(cat "$tmp/out")" = "CSUB" ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run 'echo $((1+2))'
+echo "arith stays C: $( [ "$(cat "$tmp/out")" = "3" ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run "cd '$tmp/g'; echo ONLY*"
+echo "glob stays C: $( [ "$(cat "$tmp/out")" = "ONLYONE" ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run 'x=ZZ; echo ${x}'
+echo "brace stays C: $( [ "$(cat "$tmp/out")" = "ZZ" ] && echo yes || echo no )"

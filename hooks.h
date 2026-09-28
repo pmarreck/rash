@@ -18,6 +18,9 @@ extern int rash_hooks_before_simple (WORD_LIST *words);
 extern int rash_hooks_choose_dispatch (WORD_LIST *words, int have_function,
 				      int have_builtin, int *force_disk,
 				      int *prefer_builtin);
+/* 1 if *out is a Lua-built word list and expand_words must not run.
+   0 if the caller should use C expand_words. */
+extern int rash_hooks_try_lua_expand (WORD_LIST *unexpanded, WORD_LIST **out);
 /* After a simple command finishes; optional capped stdout/stderr capture. */
 extern void rash_hooks_after_simple (WORD_LIST *words, int status,
 				    const char *captured_stdout, size_t stdout_len,

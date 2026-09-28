@@ -29,6 +29,7 @@
 #include "builtins.h"
 #include "builtins/common.h"
 #include "hooks.h"
+#include "make_cmd.h"
 #include "stat-time.h"
 #include "trap.h"
 #include "unwind_prot.h"
@@ -118,6 +119,7 @@ static int on_exec_table_ref = LUA_NOREF;
 static int stdio_bundle_table_ref = LUA_NOREF;
 static int rack_table_ref = LUA_NOREF;
 static int dispatch_table_ref = LUA_NOREF;
+static int expand_hook_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
@@ -131,6 +133,7 @@ static int on_exec_count;
 static int stdio_bundle_count;
 static int rack_count;
 static int dispatch_count;
+static int expand_hook_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
@@ -144,6 +147,7 @@ static int *on_exec_enforcing;
 static int *stdio_bundle_enforcing;
 static int *rack_enforcing;
 static int *dispatch_enforcing;
+static int *expand_hook_enforcing;
 static int loading_file_enforcing;
 static int rack_depth;
 static int rack_denied;
@@ -152,6 +156,7 @@ static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
 static int in_dispatch_stage;
+static int in_expand_stage;
 static int in_redirect_stage;
 static int in_download_pipe_stage;
 static int in_before_pipeline_stage;
@@ -193,6 +198,8 @@ static int rash_lua_is_directory (lua_State *);
 static int rash_lua_use (lua_State *);
 static int rash_lua_audit (lua_State *);
 static int rash_lua_on_dispatch (lua_State *);
+static int rash_lua_on_expand (lua_State *);
+static int rash_lua_shell_var (lua_State *);
 static int rash_rack_invoke (RASH_RACK_RUN *, int);
 static int rash_rack_next (lua_State *);
 static int rash_lua_warn (lua_State *);
@@ -487,6 +494,29 @@ rash_lua_on_dispatch (lua_State *L)
 }
 
 static int
+rash_lua_on_expand (lua_State *L)
+{
+  /* Before expand: function(info) -> nil (use C) or a word array. */
+  return rash_register_callback (L, expand_hook_table_ref, &expand_hook_enforcing,
+				 &expand_hook_count);
+}
+
+static int
+rash_lua_shell_var (lua_State *L)
+{
+  const char *name;
+  char *value;
+
+  name = luaL_checkstring (L, 1);
+  value = get_string_value (name);
+  if (value)
+    lua_pushstring (L, value);
+  else
+    lua_pushnil (L);
+  return 1;
+}
+
+static int
 rash_lua_use (lua_State *L)
 {
   /* Blessed Rack middleware: function(cmd, next) -> status. */
@@ -625,7 +655,7 @@ rash_lua_deny (lua_State *L)
     }
 
   /* Stage sensors use stage_denied rather than parse-stage hook context. */
-  if (in_before_stage || in_dispatch_stage || in_redirect_stage || in_download_pipe_stage
+  if (in_before_stage || in_dispatch_stage || in_expand_stage || in_redirect_stage || in_download_pipe_stage
       || in_before_pipeline_stage || in_builtin_stage || in_function_stage
       || in_exec_stage)
     {
@@ -1030,6 +1060,10 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "use");
   lua_pushcfunction (L, rash_lua_on_dispatch);
   lua_setfield (L, -2, "on_dispatch");
+  lua_pushcfunction (L, rash_lua_on_expand);
+  lua_setfield (L, -2, "on_expand");
+  lua_pushcfunction (L, rash_lua_shell_var);
+  lua_setfield (L, -2, "shell_var");
   lua_pushcfunction (L, rash_lua_audit);
   lua_setfield (L, -2, "audit");
   lua_pushcfunction (L, rash_lua_before);
@@ -1105,6 +1139,9 @@ rash_lua_ready (void)
   lua_newtable (L);
   dispatch_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   dispatch_count = 0;
+  lua_newtable (L);
+  expand_hook_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  expand_hook_count = 0;
   rash_lua = L;
   return 1;
 }
@@ -1428,16 +1465,17 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   redirect_table_ref = clobber_table_ref = download_pipe_table_ref = LUA_NOREF;
   before_pipeline_table_ref = on_builtin_table_ref = on_function_table_ref = LUA_NOREF;
   on_exec_table_ref = stdio_bundle_table_ref = rack_table_ref = LUA_NOREF;
-  dispatch_table_ref = LUA_NOREF;
+  dispatch_table_ref = expand_hook_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
   redirect_count = clobber_count = download_pipe_count = 0;
   before_pipeline_count = on_builtin_count = on_function_count = 0;
   on_exec_count = stdio_bundle_count = rack_count = dispatch_count = 0;
+  expand_hook_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
   redirect_enforcing = clobber_enforcing = download_pipe_enforcing = 0;
   before_pipeline_enforcing = on_builtin_enforcing = on_function_enforcing = 0;
   on_exec_enforcing = stdio_bundle_enforcing = rack_enforcing = 0;
-  dispatch_enforcing = 0;
+  dispatch_enforcing = expand_hook_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -3337,6 +3375,190 @@ rash_hooks_choose_dispatch (WORD_LIST *words, int have_function, int have_builti
   in_dispatch_stage = 0;
   current_hook_enforcing = 0;
   return stage_denied ? 1 : 0;
+}
+
+/* Plain identifier: [A-Za-z_][A-Za-z0-9_]* */
+static int
+rash_simple_name (const char *s)
+{
+  unsigned char c;
+
+  if (s == 0 || *s == '\0')
+    return 0;
+  c = (unsigned char)*s;
+  if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'))
+    return 0;
+  for (s++; *s; s++)
+    {
+      c = (unsigned char)*s;
+      if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+	    (c >= '0' && c <= '9') || c == '_'))
+	return 0;
+    }
+  return 1;
+}
+
+/* One word may take the Lua expand path only when it is a literal or $NAME.
+   Quotes, globs, substitutions, and assignments stay on C. */
+static int
+rash_word_lua_expandable (WORD_DESC *word)
+{
+  const char *s;
+
+  if (word == 0 || word->word == 0)
+    return 0;
+  if (word->flags & (W_QUOTED | W_ASSIGNMENT | W_ARRAYREF | W_COMPASSIGN |
+		     W_HASQUOTEDNULL | W_TILDEEXP))
+    return 0;
+  s = word->word;
+  if (*s == '\0')
+    return 1;
+  if (strpbrk (s, "\"'`\\*?[{~") != 0)
+    return 0;
+  if (strstr (s, "$((") || strstr (s, "$(") || strstr (s, "${"))
+    return 0;
+  if (s[0] == '$')
+    return rash_simple_name (s + 1);
+  if (strchr (s, '$') != 0)
+    return 0;
+  return 1;
+}
+
+/* "lua" only when every word in the list is lua-expandable. Else "c". */
+static const char *
+rash_expand_mode (WORD_LIST *words)
+{
+  WORD_LIST *w;
+
+  if (words == 0)
+    return "c";
+  for (w = words; w; w = w->next)
+    if (rash_word_lua_expandable (w->word) == 0)
+      return "c";
+  return "lua";
+}
+
+static WORD_LIST *
+rash_words_from_lua_table (lua_State *L, int index)
+{
+  WORD_LIST *head, *tail;
+  int n, i;
+
+  if (lua_istable (L, index) == 0)
+    return 0;
+  n = (int)lua_objlen (L, index);
+  if (n <= 0)
+    return 0;
+  head = tail = 0;
+  for (i = 1; i <= n; i++)
+    {
+      WORD_LIST *link;
+      const char *text;
+
+      lua_rawgeti (L, index, i);
+      if (lua_isstring (L, -1) == 0)
+	{
+	  lua_pop (L, 1);
+	  dispose_words (head);
+	  return 0;
+	}
+      text = lua_tostring (L, -1);
+      link = make_word_list (make_word (text ? text : ""), (WORD_LIST *)NULL);
+      lua_pop (L, 1);
+      if (head == 0)
+	head = tail = link;
+      else
+	{
+	  tail->next = link;
+	  tail = link;
+	}
+    }
+  return head;
+}
+
+int
+rash_hooks_try_lua_expand (WORD_LIST *unexpanded, WORD_LIST **out)
+{
+  const char *mode;
+  int i, base, status, use_lua;
+  WORD_LIST *built;
+
+  *out = (WORD_LIST *)NULL;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (rash_lua == 0 || expand_hook_count == 0)
+    return 0;
+
+  mode = rash_expand_mode (unexpanded);
+  use_lua = strcmp (mode, "lua") == 0;
+  built = (WORD_LIST *)NULL;
+  stage_denied = 0;
+  in_expand_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= expand_hook_count; i++)
+    {
+      current_hook_enforcing = expand_hook_enforcing && expand_hook_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, expand_hook_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      lua_newtable (rash_lua);
+      rash_push_words (rash_lua, unexpanded);
+      lua_setfield (rash_lua, -2, "words");
+      lua_pushstring (rash_lua, mode);
+      lua_setfield (rash_lua, -2, "mode");
+      status = rash_lua_pcall (rash_lua, 1, 1);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing expand hook failed; denying command: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory expand hook failed; using C expand: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      else if (use_lua && lua_istable (rash_lua, -1))
+	{
+	  WORD_LIST *next;
+
+	  next = rash_words_from_lua_table (rash_lua, lua_gettop (rash_lua));
+	  if (next)
+	    {
+	      dispose_words (built);
+	      built = next;
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_expand_stage = 0;
+  current_hook_enforcing = 0;
+  if (stage_denied)
+    {
+      dispose_words (built);
+      *out = (WORD_LIST *)NULL;
+      return -1;
+    }
+  /* C shapes never take the Lua word list. One path only. */
+  if (use_lua == 0 || built == 0)
+    {
+      dispose_words (built);
+      return 0;
+    }
+  *out = built;
+  return 1;
 }
 
 void

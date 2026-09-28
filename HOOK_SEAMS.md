@@ -33,6 +33,8 @@ What Lua can see and must return at each lifecycle point. Companion to
 `rash.use(function(cmd, next) ... end)` wraps outermost `execute_command`. `cmd` is the same unexpanded tree as `rash.hook`. `rash.deny` aborts without `next`. `rash.audit(line)` appends to `RASH_AUDIT_LOG` (stderr if unset). `RASH_EXEC=c` skips the stack. Packaged `audit_commands.lua` logs each simple command in a connection.
 
 `rash.on_dispatch(function(info) ... end)` runs after expand, per simple command. `info.words` is expanded. `info.resolved` is `function`, `builtin` (special only), or `command` (regular builtin or disk; C still looks that up). Return `"builtin"` to skip a function shadow, `"disk"` to skip builtin and function lookup, or nil to keep C's choice. Pipelines and `;` stay C; each simple command still dispatches.
+
+`rash.on_expand(function(info) ... end)` runs before expand. `info.mode` is `lua` only when every word is a literal or `$NAME`. Quotes, globs, `$(...)`, `${...}`, `$((...))`, and assignments are `c`. Return a word array to use that list and skip `expand_words`; return nil to use C. A returned array is ignored when `mode` is `c` (one path, never both). `rash.shell_var(name)` reads a shell variable.
 | **Good for** | Structural policy (pipelines, sudo\|tee shapes, deny-lists on literals) |
 | **Not for** | Values of variables; live pipe bytes; expanded argv |
 

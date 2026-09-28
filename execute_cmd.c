@@ -4558,7 +4558,17 @@ rash_stage_expand_simple_words (SIMPLE_COM *simple_command, int cmdflags,
       /* Pass the ignore return flag down to command substitutions */
       if (cmdflags & CMD_IGNORE_RETURN)	/* XXX */
 	comsub_ignore_return++;
-      words = expand_words (simple_command->words);
+      {
+	int lua_expand;
+
+	/* 1: Lua word list, do not also call expand_words.
+	   0: C expand_words. -1: hook denied. */
+	lua_expand = rash_hooks_try_lua_expand (simple_command->words, &words);
+	if (lua_expand == 0)
+	  words = expand_words (simple_command->words);
+	else if (lua_expand < 0)
+	  words = (WORD_LIST *)NULL;
+      }
       if (cmdflags & CMD_IGNORE_RETURN)
 	comsub_ignore_return--;
       current_fds_to_close = (struct fd_bitmap *)NULL;

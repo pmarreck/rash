@@ -1,0 +1,2 @@
+${THIS_SH} ./rack-expand.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} rack-expand.right && rm -f ${BASH_TSTOUT}
