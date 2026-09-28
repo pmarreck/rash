@@ -46,6 +46,7 @@ test -f "$out/share/rash/hooks/deny_sensitive_clobber.lua"
 								test -f "$out/share/rash/hooks/approve_download_pipe.lua"
 								test -f "$out/share/rash/hooks/example_stdio_json.lua"
 								test -f "$out/share/rash/hooks/deny_symlink_replace.lua"
+								test -f "$out/share/rash/hooks/audit_commands.lua"
 							'';
 							doCheck = withTests;
 							checkTarget = "tests";
@@ -116,6 +117,7 @@ test -f "$out/share/rash/hooks/deny_sensitive_clobber.lua"
 								test -f "$out/share/rash/hooks/approve_download_pipe.lua"
 								test -f "$out/share/rash/hooks/example_stdio_json.lua"
 								test -f "$out/share/rash/hooks/deny_symlink_replace.lua"
+								test -f "$out/share/rash/hooks/audit_commands.lua"
 							'';
 							doCheck = withTests;
 							checkTarget = "tests";

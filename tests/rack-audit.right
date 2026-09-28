@@ -1,0 +1,11 @@
+audit ran body: yes
+audit saw printf: yes
+audit connection both: yes
+audit connection second: yes
+deny blocks printf: yes
+deny did not run body: yes
+deny status nonzero: yes
+layers outer before inner: yes
+layers outer after inner: yes
+exec c still runs: yes
+exec c skips audit: yes

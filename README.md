@@ -21,6 +21,10 @@ someone who owns the process. See `INTENT.md` and `THREAT_MODEL.md`.
 Hooks are ordinary `.lua` files. Root-owned ones enforce; user-owned ones
 are advisory unless you opt in. Adding a new guard is a hook, not a C patch.
 Purpose: `INTENT.md`. Seams: `HOOK_SEAMS.md`. Design: `HOOKS_DESIGN.md`.
+`rash.use` is the Rack layer around a command: call `next` to run it,
+`rash.deny` to stop it, `rash.audit` to append a line (`RASH_AUDIT_LOG`,
+or stderr). `audit_commands.lua` logs each simple command. `RASH_EXEC=c`
+skips the Rack.
 
 Development uses hermetic Nix: `./build` and `./test` (GCC); `./build --zig`
 and `./test --zig` (same C, pinned Zig 0.16). `./bm` / `./bm --micro` log

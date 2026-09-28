@@ -38,6 +38,7 @@
 #include "../shell.h"
 #include "../jobs.h"
 #include "../builtins.h"
+#include "../hooks.h"
 #include "../flags.h"
 #include "../parser.h"
 #include "../input.h"
@@ -564,8 +565,7 @@ INTERNAL_DEBUG(("parse_and_execute: calling cat_file, parse_and_execute_level = 
 		}
 	      else
 #endif
-		last_result = execute_command_internal
-				(command, 0, NO_PIPE, NO_PIPE, bitmap);
+		last_result = rash_rack_execute (command, 0, NO_PIPE, NO_PIPE, bitmap);
 	      dispose_command (command);
 	      dispose_fd_bitmap (bitmap);
 	      discard_unwind_frame ("pe_dispose");

@@ -1,0 +1,2 @@
+${THIS_SH} ./rack-audit.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} rack-audit.right && rm -f ${BASH_TSTOUT}

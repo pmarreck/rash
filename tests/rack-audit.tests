@@ -1,0 +1,110 @@
+# Rack is usable when a rash.use layer can deny, and auditable when
+# rash.audit records unexpanded simple-command words. RASH_EXEC=c skips both.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-rack-audit.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+cat > "$tmp/audit.lua" <<'EOF'
+local function walk(cmd)
+  if not cmd then
+    return
+  end
+  if cmd.kind == "simple" then
+    local words = cmd.words
+    local line = "simple"
+    local i = 1
+    while words and words[i] do
+      line = line .. " " .. words[i]
+      i = i + 1
+    end
+    rash.audit(line)
+  elseif cmd.kind == "connection" then
+    walk(cmd.left)
+    walk(cmd.right)
+  end
+end
+
+rash.use(function(cmd, nxt)
+  walk(cmd)
+  return nxt(cmd)
+end)
+EOF
+
+cat > "$tmp/deny.lua" <<'EOF'
+rash.use(function(cmd, nxt)
+  if cmd.kind == "simple" and cmd.words and cmd.words[1] == "printf" then
+    rash.deny("rack blocked printf")
+    return 1
+  end
+  return nxt(cmd)
+end)
+EOF
+
+cat > "$tmp/layers.lua" <<'EOF'
+rash.use(function(cmd, nxt)
+  rash.audit("outer-before")
+  local st = nxt(cmd)
+  rash.audit("outer-after")
+  return st
+end)
+rash.use(function(cmd, nxt)
+  rash.audit("inner")
+  return nxt(cmd)
+end)
+EOF
+
+run()
+{
+	RASH_AUDIT_LOG="$tmp/audit" RASH_HOOK_DIR="$1" \
+		RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile -c "$2" >"$tmp/out" 2>"$tmp/err"
+}
+
+mkdir -p "$tmp/hooks-audit" "$tmp/hooks-deny" "$tmp/hooks-layers"
+cp "$tmp/audit.lua" "$tmp/hooks-audit/audit.lua"
+cp "$tmp/deny.lua" "$tmp/hooks-deny/deny.lua"
+cp "$tmp/layers.lua" "$tmp/hooks-layers/layers.lua"
+
+: > "$tmp/audit"
+run "$tmp/hooks-audit" 'printf AUDIT'
+echo "audit ran body: $(contains "$(cat "$tmp/out")" "AUDIT")"
+audit=$(cat "$tmp/audit")
+echo "audit saw printf: $(contains "$audit" "simple printf AUDIT")"
+
+: > "$tmp/audit"
+run "$tmp/hooks-audit" 'echo one; echo two'
+audit=$(cat "$tmp/audit")
+echo "audit connection both: $(contains "$audit" "simple echo one")"
+echo "audit connection second: $(contains "$audit" "simple echo two")"
+
+: > "$tmp/audit"
+run "$tmp/hooks-deny" 'printf SHOULD_NOT'
+status=$?
+echo "deny blocks printf: $(contains "$(cat "$tmp/err")" "rack blocked printf")"
+echo "deny did not run body: $( [ -z "$(cat "$tmp/out")" ] && echo yes || echo no )"
+echo "deny status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run "$tmp/hooks-layers" 'true'
+audit=$(cat "$tmp/audit")
+echo "layers outer before inner: $(contains "$audit" "outer-before
+inner")"
+echo "layers outer after inner: $(contains "$audit" "inner
+outer-after")"
+
+: > "$tmp/audit"
+RASH_EXEC=c RASH_AUDIT_LOG="$tmp/audit" RASH_HOOK_DIR="$tmp/hooks-audit" \
+	RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+	${THIS_SH} --norc --noprofile -c 'printf SKIP' >"$tmp/out" 2>"$tmp/err"
+echo "exec c still runs: $(contains "$(cat "$tmp/out")" "SKIP")"
+echo "exec c skips audit: $( [ ! -s "$tmp/audit" ] && echo yes || echo no )"

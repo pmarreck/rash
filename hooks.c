@@ -143,6 +143,8 @@ static int *stdio_bundle_enforcing;
 static int *rack_enforcing;
 static int loading_file_enforcing;
 static int rack_depth;
+static int rack_denied;
+static char rack_deny_reason[RASH_DENY_REASON_MAX];
 static int current_hook_enforcing;
 static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
@@ -185,6 +187,7 @@ static int rash_lua_undo_last (lua_State *);
 static int rash_lua_is_symlink (lua_State *);
 static int rash_lua_is_directory (lua_State *);
 static int rash_lua_use (lua_State *);
+static int rash_lua_audit (lua_State *);
 static int rash_rack_invoke (RASH_RACK_RUN *, int);
 static int rash_rack_next (lua_State *);
 static int rash_lua_warn (lua_State *);
@@ -477,6 +480,29 @@ rash_lua_use (lua_State *L)
   return rash_register_callback (L, rack_table_ref, &rack_enforcing, &rack_count);
 }
 
+/* Append one audit line. RASH_AUDIT_LOG is the file; otherwise stderr. */
+static int
+rash_lua_audit (lua_State *L)
+{
+  const char *line, *path;
+  FILE *fp;
+
+  line = luaL_checkstring (L, 1);
+  path = getenv ("RASH_AUDIT_LOG");
+  if (path == 0 || path[0] == '\0')
+    {
+      fprintf (stderr, "rash audit: %s\n", line);
+      return 0;
+    }
+  fp = fopen (path, "a");
+  if (fp == 0)
+    return luaL_error (L, "rash.audit cannot open log");
+  fprintf (fp, "%s\n", line);
+  if (fclose (fp) != 0)
+    return luaL_error (L, "rash.audit cannot close log");
+  return 0;
+}
+
 static int
 rash_lua_before (lua_State *L)
 {
@@ -599,6 +625,21 @@ rash_lua_deny (lua_State *L)
 	  memcpy (stage_deny_reason, reason, length);
 	  stage_deny_reason[length] = '\0';
 	  fprintf (stderr, "rash: denied: %s\n", stage_deny_reason);
+	}
+      return 0;
+    }
+
+  if (rack_depth > 0 && (active_hook_context == 0 || active_hook_context->active == 0))
+    {
+      if (rack_denied == 0)
+	{
+	  rack_denied = 1;
+	  length = strlen (reason);
+	  if (length >= RASH_DENY_REASON_MAX)
+	    length = RASH_DENY_REASON_MAX - 1;
+	  memcpy (rack_deny_reason, reason, length);
+	  rack_deny_reason[length] = '\0';
+	  fprintf (stderr, "rash: denied: %s\n", rack_deny_reason);
 	}
       return 0;
     }
@@ -974,6 +1015,8 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "hook");
   lua_pushcfunction (L, rash_lua_use);
   lua_setfield (L, -2, "use");
+  lua_pushcfunction (L, rash_lua_audit);
+  lua_setfield (L, -2, "audit");
   lua_pushcfunction (L, rash_lua_before);
   lua_setfield (L, -2, "before");
   lua_pushcfunction (L, rash_lua_after);
@@ -1535,8 +1578,21 @@ rash_rack_invoke (RASH_RACK_RUN *run, int index)
   *proxy = *run;
   lua_pushinteger (L, index + 1);
   lua_pushcclosure (L, rash_rack_next, 2);
-  status = rash_lua_pcall (L, 2, 1);
-  if (status != 0)
+  {
+    int saved_enforcing;
+
+    saved_enforcing = current_hook_enforcing;
+    current_hook_enforcing = rack_enforcing && rack_enforcing[index - 1];
+    rack_denied = 0;
+    status = rash_lua_pcall (L, 2, 1);
+    current_hook_enforcing = saved_enforcing;
+  }
+  if (rack_denied)
+    {
+      result = last_command_exit_value = EXECUTION_FAILURE;
+      set_pipestatus_from_exit (result);
+    }
+  else if (status != 0)
     {
       const char *lua_error;
 
@@ -1580,7 +1636,13 @@ rash_rack_execute (COMMAND *command, int asynchronous, int pipe_in, int pipe_out
     return execute_command_internal (command, asynchronous, pipe_in, pipe_out,
 				     fds_to_close);
 
-  if (rack_depth > 0 || rash_lua == 0 || rack_count == 0)
+  if (rack_depth > 0)
+    return execute_command_internal (command, asynchronous, pipe_in, pipe_out,
+				     fds_to_close);
+
+  /* -c, scripts, and eval enter here without execute_command's begin hook. */
+  rash_hooks_initialize (0);
+  if (rash_lua == 0 || rack_count == 0)
     return execute_command_internal (command, asynchronous, pipe_in, pipe_out,
 				     fds_to_close);
 
