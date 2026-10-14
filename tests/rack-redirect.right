@@ -1,0 +1,9 @@
+deny missing: yes
+deny status: yes
+deny message: yes
+allow content: yes
+allow audited: yes
+plain output: yes
+plain skipped policy: yes
+child allow: yes
+child deny missing: yes

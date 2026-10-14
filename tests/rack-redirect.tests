@@ -1,0 +1,68 @@
+# Phase 4 waist: Lua may deny a simple command's redirects before the C
+# apply port. Nil lets do_redirections run. A returned value does not apply
+# a second time. Commands with no redirects skip the hook.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-rack-redirect.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+contains()
+{
+	case $1 in
+	*"$2"*)	echo yes ;;
+	*)		echo no ;;
+	esac
+}
+
+mkdir -p "$tmp/hooks"
+
+cat > "$tmp/hooks/redirect.lua" <<'EOF'
+rash.on_redirect_policy(function(info)
+  rash.audit("policy")
+  local i = 1
+  while info.redirects and info.redirects[i] do
+    local word = info.redirects[i].word
+    if word == "BLOCKED" or word == "BLOCKED2" then
+      rash.deny("refusing BLOCKED")
+      return
+    end
+    i = i + 1
+  end
+end)
+EOF
+
+run()
+{
+	RASH_AUDIT_LOG="$tmp/audit" RASH_HOOK_DIR="$tmp/hooks" \
+		RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 \
+		${THIS_SH} --norc --noprofile -c "$1" >"$tmp/out" 2>"$tmp/err"
+	echo $? >"$tmp/status"
+}
+
+: > "$tmp/audit"
+run "cd '$tmp' && echo hi > BLOCKED"
+echo "deny missing: $( [ ! -e "$tmp/BLOCKED" ] && echo yes || echo no )"
+echo "deny status: $( [ "$(cat "$tmp/status")" != 0 ] && echo yes || echo no )"
+echo "deny message: $(contains "$(cat "$tmp/err")" "refusing BLOCKED")"
+
+: > "$tmp/audit"
+run "cd '$tmp' && echo hi > OK"
+echo "allow content: $( [ "$(cat "$tmp/OK" 2>/dev/null)" = "hi" ] && echo yes || echo no )"
+echo "allow audited: $(contains "$(cat "$tmp/audit")" "policy")"
+
+: > "$tmp/audit"
+run 'echo plain'
+echo "plain output: $( [ "$(cat "$tmp/out")" = "plain" ] && echo yes || echo no )"
+case "$(cat "$tmp/audit")" in
+*policy*)	echo "plain skipped policy: no" ;;
+*)		echo "plain skipped policy: yes" ;;
+esac
+
+: > "$tmp/audit"
+run "cd '$tmp' && enable -n echo && echo hi > CHILD"
+echo "child allow: $( [ "$(cat "$tmp/CHILD" 2>/dev/null)" = "hi" ] && echo yes || echo no )"
+
+: > "$tmp/audit"
+run "cd '$tmp' && enable -n echo && echo hi > BLOCKED2"
+echo "child deny missing: $( [ ! -e "$tmp/BLOCKED2" ] && echo yes || echo no )"

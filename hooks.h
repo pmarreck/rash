@@ -21,6 +21,9 @@ extern int rash_hooks_choose_dispatch (WORD_LIST *words, int have_function,
 /* 1 if *out is a Lua-built word list and expand_words must not run.
    0 if the caller should use C expand_words. */
 extern int rash_hooks_try_lua_expand (WORD_LIST *unexpanded, WORD_LIST **out);
+/* Before do_redirections on a simple command. Non-zero: do not apply.
+   No registered policy hook returns zero and does not enter Lua. */
+extern int rash_hooks_redirect_policy (REDIRECT *redirects);
 /* After a simple command finishes; optional capped stdout/stderr capture. */
 extern void rash_hooks_after_simple (WORD_LIST *words, int status,
 				    const char *captured_stdout, size_t stdout_len,

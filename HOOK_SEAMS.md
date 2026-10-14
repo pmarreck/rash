@@ -82,6 +82,16 @@ end)
 
 `on_clobber` is the same event filtered to `will_clobber == true`.
 
+### 4b. Redirect policy — `rash.on_redirect_policy(fn)`
+
+| | |
+|---|---|
+| **Where** | `rash_stage_apply_simple_redirects`, before `do_redirections` |
+| **When** | Simple-command redirect list is non-empty. No list skips Lua. No registered policy hook skips Lua. |
+| **Receives** | `info.redirects`: same `is_input` / `is_clobber` / `word` rows as the parse-stage redirect table. Words are whatever the executor has at apply time. |
+| **Must / may** | `rash.deny` skips the apply port. Return nil (or anything else) and C calls `do_redirections` once. A return value is not a replacement redirect list. |
+| **Still inside the port** | `on_redirect` / `on_clobber`, including snapshot. Those run only if policy lets the apply proceed. |
+
 ### 5. Download→shell — `rash.on_download_pipe(fn)`
 
 | | |

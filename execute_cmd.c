@@ -5975,11 +5975,20 @@ execute_subshell_builtin_or_function (WORD_LIST *words, REDIRECT *redirects,
    undoable != 0: parent builtin/function (RX_ACTIVE|RX_UNDOABLE). Failure
    undoes partial redirects and returns EX_REDIRFAIL.
    undoable == 0: child disk/subshell (RX_ACTIVE). Failure returns
-   EXECUTION_FAILURE; caller exits. Sensors stay in do_redirections. */
+   EXECUTION_FAILURE; caller exits. A policy deny returns before
+   do_redirections, so there is nothing to undo. Sensors stay inside
+   do_redirections when the C port runs. */
 static int
 rash_stage_apply_simple_redirects (REDIRECT *redirects, int undoable)
 {
   int r;
+
+  if (redirects && rash_hooks_redirect_policy (redirects) != 0)
+    {
+      if (undoable)
+	return (EX_REDIRFAIL);
+      return (EXECUTION_FAILURE);
+    }
 
   r = do_redirections (redirects, undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
   if (r == 0)

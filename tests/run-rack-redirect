@@ -1,0 +1,2 @@
+${THIS_SH} ./rack-redirect.tests > ${BASH_TSTOUT} 2>&1
+diff ${BASH_TSTOUT} rack-redirect.right && rm -f ${BASH_TSTOUT}

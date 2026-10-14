@@ -57,8 +57,8 @@ The language stays Bash. Policy is LuaJIT hooks, not a new dialect.
 
 ## Open questions / sequenced work
 
-- **LuaJIT Rack-style executor** (`intents/luajit-rack-executor.md`): **accepted** as the next direction (Peter, 2026-09-16). C stage extraction was prep. Phase 1 is a no-op Lua `next` around outermost `execute_command`; the suite must not drift. COW waits until this exists.
-- OverlayFS / COW workspace launcher: still wanted; **do not start until Rack**. (`PLAN.md` Safety D.)
+- **LuaJIT Rack-style executor** (`intents/luajit-rack-executor.md`): **accepted** (BDFN, 2026-09-16). Phases 1–3 are on master: outer `rash.use`, dispatch choice, and one-path expand. The current slice is phase 4 redirect policy. COW stays after that slice. The suite must not drift.
+- OverlayFS / COW workspace launcher: still wanted. Do not start it while the redirect slice is the active Rack work.
 - Embedded LuaJIT as a general script host (`rash foo.lua`, shebang, `package.path`): **tabled**. A full LuaJIT (io/os/package/FFI) would make the hook sandbox meaningless if it shared that VM.
 
 ## Links

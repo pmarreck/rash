@@ -276,6 +276,11 @@ Clobber undo / download-pipe rebase onto `cmd` fields instead of ad-hoc seams.
 `clobber-undo` / `installer-approval`.  
 **Still C:** heredoc temp file creation details inside the apply port.
 
+**Waist 1:** `rash.on_redirect_policy` may deny before `do_redirections`.
+Nil, or no hook, is the C port, once. Lua does not replace the redirect
+list. `on_redirect` and `on_clobber` stay inside the port. Pins:
+`tests/rack-redirect.*`.
+
 ### 7A.5 Phase 5 — IR lower (marshalling ends)
 
 **Lua owns:** `cmd` IR for the whole execute path of migrated shapes.  

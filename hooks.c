@@ -120,6 +120,7 @@ static int stdio_bundle_table_ref = LUA_NOREF;
 static int rack_table_ref = LUA_NOREF;
 static int dispatch_table_ref = LUA_NOREF;
 static int expand_hook_table_ref = LUA_NOREF;
+static int redirect_policy_table_ref = LUA_NOREF;
 static int hook_count;
 static int before_count;
 static int after_count;
@@ -134,6 +135,7 @@ static int stdio_bundle_count;
 static int rack_count;
 static int dispatch_count;
 static int expand_hook_count;
+static int redirect_policy_count;
 static int *hook_enforcing;
 static int *before_enforcing;
 static int *after_enforcing;
@@ -148,6 +150,7 @@ static int *stdio_bundle_enforcing;
 static int *rack_enforcing;
 static int *dispatch_enforcing;
 static int *expand_hook_enforcing;
+static int *redirect_policy_enforcing;
 static int loading_file_enforcing;
 static int rack_depth;
 static int rack_denied;
@@ -157,6 +160,7 @@ static RASH_HOOK_CONTEXT *active_hook_context;
 static int in_before_stage;
 static int in_dispatch_stage;
 static int in_expand_stage;
+static int in_redirect_policy_stage;
 static int in_redirect_stage;
 static int in_download_pipe_stage;
 static int in_before_pipeline_stage;
@@ -199,6 +203,7 @@ static int rash_lua_use (lua_State *);
 static int rash_lua_audit (lua_State *);
 static int rash_lua_on_dispatch (lua_State *);
 static int rash_lua_on_expand (lua_State *);
+static int rash_lua_on_redirect_policy (lua_State *);
 static int rash_lua_shell_var (lua_State *);
 static int rash_rack_invoke (RASH_RACK_RUN *, int);
 static int rash_rack_next (lua_State *);
@@ -502,6 +507,15 @@ rash_lua_on_expand (lua_State *L)
 }
 
 static int
+rash_lua_on_redirect_policy (lua_State *L)
+{
+  /* Before apply: function(info) may rash.deny. Nil lets C apply. */
+  return rash_register_callback (L, redirect_policy_table_ref,
+				 &redirect_policy_enforcing,
+				 &redirect_policy_count);
+}
+
+static int
 rash_lua_shell_var (lua_State *L)
 {
   const char *name;
@@ -655,7 +669,7 @@ rash_lua_deny (lua_State *L)
     }
 
   /* Stage sensors use stage_denied rather than parse-stage hook context. */
-  if (in_before_stage || in_dispatch_stage || in_expand_stage || in_redirect_stage || in_download_pipe_stage
+  if (in_before_stage || in_dispatch_stage || in_expand_stage || in_redirect_policy_stage || in_redirect_stage || in_download_pipe_stage
       || in_before_pipeline_stage || in_builtin_stage || in_function_stage
       || in_exec_stage)
     {
@@ -1062,6 +1076,8 @@ rash_lua_ready (void)
   lua_setfield (L, -2, "on_dispatch");
   lua_pushcfunction (L, rash_lua_on_expand);
   lua_setfield (L, -2, "on_expand");
+  lua_pushcfunction (L, rash_lua_on_redirect_policy);
+  lua_setfield (L, -2, "on_redirect_policy");
   lua_pushcfunction (L, rash_lua_shell_var);
   lua_setfield (L, -2, "shell_var");
   lua_pushcfunction (L, rash_lua_audit);
@@ -1142,6 +1158,9 @@ rash_lua_ready (void)
   lua_newtable (L);
   expand_hook_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
   expand_hook_count = 0;
+  lua_newtable (L);
+  redirect_policy_table_ref = luaL_ref (L, LUA_REGISTRYINDEX);
+  redirect_policy_count = 0;
   rash_lua = L;
   return 1;
 }
@@ -1465,17 +1484,17 @@ rash_hooks_load_configuration (const char *directory, int allow_unowned, int enf
   redirect_table_ref = clobber_table_ref = download_pipe_table_ref = LUA_NOREF;
   before_pipeline_table_ref = on_builtin_table_ref = on_function_table_ref = LUA_NOREF;
   on_exec_table_ref = stdio_bundle_table_ref = rack_table_ref = LUA_NOREF;
-  dispatch_table_ref = expand_hook_table_ref = LUA_NOREF;
+  dispatch_table_ref = expand_hook_table_ref = redirect_policy_table_ref = LUA_NOREF;
   hook_count = before_count = after_count = 0;
   redirect_count = clobber_count = download_pipe_count = 0;
   before_pipeline_count = on_builtin_count = on_function_count = 0;
   on_exec_count = stdio_bundle_count = rack_count = dispatch_count = 0;
-  expand_hook_count = 0;
+  expand_hook_count = redirect_policy_count = 0;
   hook_enforcing = before_enforcing = after_enforcing = 0;
   redirect_enforcing = clobber_enforcing = download_pipe_enforcing = 0;
   before_pipeline_enforcing = on_builtin_enforcing = on_function_enforcing = 0;
   on_exec_enforcing = stdio_bundle_enforcing = rack_enforcing = 0;
-  dispatch_enforcing = expand_hook_enforcing = 0;
+  dispatch_enforcing = expand_hook_enforcing = redirect_policy_enforcing = 0;
   hook_enforce_unowned = enforce_unowned;
 
   loaded = rash_lua_ready () && rash_load_hooks (directory, allow_unowned);
@@ -1942,7 +1961,7 @@ rash_hooks_have_any_observers (void)
     || redirect_count > 0 || clobber_count > 0 || download_pipe_count > 0
     || before_pipeline_count > 0 || on_builtin_count > 0
     || on_function_count > 0 || on_exec_count > 0
-    || stdio_bundle_count > 0;
+    || stdio_bundle_count > 0 || redirect_policy_count > 0;
 }
 
 /* Expand a copy of a simple command's words; NULL if the side is not simple. */
@@ -3559,6 +3578,66 @@ rash_hooks_try_lua_expand (WORD_LIST *unexpanded, WORD_LIST **out)
     }
   *out = built;
   return 1;
+}
+
+/* Deny-before-apply. Zero means the caller runs do_redirections once.
+   A Lua return value is ignored, so the hook cannot apply a second list. */
+int
+rash_hooks_redirect_policy (REDIRECT *redirects)
+{
+  int i, base, status;
+
+  if (redirects == 0)
+    return 0;
+  if (hook_command_depth == 0)
+    rash_hooks_initialize (0);
+  if (rash_lua == 0 || redirect_policy_count == 0)
+    return 0;
+
+  stage_denied = 0;
+  stage_deny_reason[0] = '\0';
+  in_redirect_policy_stage = 1;
+  base = lua_gettop (rash_lua);
+
+  for (i = 1; i <= redirect_policy_count; i++)
+    {
+      current_hook_enforcing = redirect_policy_enforcing &&
+	redirect_policy_enforcing[i - 1];
+      lua_rawgeti (rash_lua, LUA_REGISTRYINDEX, redirect_policy_table_ref);
+      lua_rawgeti (rash_lua, -1, i);
+      lua_remove (rash_lua, -2);
+      lua_newtable (rash_lua);
+      rash_push_redirects (rash_lua, redirects);
+      lua_setfield (rash_lua, -2, "redirects");
+      status = rash_lua_pcall (rash_lua, 1, 1);
+      if (status != 0)
+	{
+	  const char *lua_error;
+
+	  lua_error = lua_tostring (rash_lua, -1);
+	  if (current_hook_enforcing)
+	    {
+	      rash_hook_warning ("enforcing redirect policy failed; denying redirect: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	      stage_denied = 1;
+	      fprintf (stderr, "rash: denied: enforcing redirect policy failed\n");
+	    }
+	  else
+	    {
+	      rash_hook_warning ("advisory redirect policy failed; applying redirects: ",
+				 lua_error ? lua_error : "(no error object)");
+	      lua_pop (rash_lua, 1);
+	    }
+	}
+      if (stage_denied)
+	break;
+    }
+
+  lua_settop (rash_lua, base);
+  in_redirect_policy_stage = 0;
+  current_hook_enforcing = 0;
+  return stage_denied ? 1 : 0;
 }
 
 void
