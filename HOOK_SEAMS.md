@@ -88,7 +88,7 @@ end)
 |---|---|
 | **Where** | `rash_stage_apply_simple_redirects`, before `do_redirections` |
 | **When** | Simple-command redirect list is non-empty. No list skips Lua. No registered policy hook skips Lua. |
-| **Receives** | `info.redirects`: same `is_input` / `is_clobber` / `word` rows as the parse-stage redirect table. Words are whatever the executor has at apply time. fd-number rows (`2>&1`, `3>&-`) have `word = nil`. |
+| **Receives** | `info.redirects`: same `is_input` / `is_clobber` / `word` rows as the parse-stage redirect table. Words are whatever the executor has at apply time. fd-number rows (`2>&1`, `3>&-`) have `word = nil`. When every file target is a literal or plain `$NAME` that expands to one field without glob, quote, or `$`, rows also carry `path`, `exists`, and `will_clobber`, and C applies exactly those paths without expanding again. Any other shape (heredoc, here-string, `>&word`, `{var}>`, quotes, command substitution) leaves `path` nil, and the port expands in Bash order. |
 | **Must / may** | `rash.deny` skips the apply port. Return nil (or anything else) and C calls `do_redirections` once. A return value is not a replacement redirect list. |
 | **Still inside the port** | `on_redirect` / `on_clobber`, including snapshot. Those run only if policy lets the apply proceed. |
 

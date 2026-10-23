@@ -394,6 +394,22 @@ rash_push_words (lua_State *L, WORD_LIST *words)
     }
 }
 
+/* Expansion would treat these as syntax, so a word or value holding one is
+   not a pure lookup. */
+#define RASH_REDIR_UNSAFE_CHARS "*?[]()<>{}!\"'`\\$~"
+
+extern SHELL_VAR *var_lookup (const char *, VAR_CONTEXT *);
+
+static void
+rash_free_paths (char **paths, int n)
+{
+  int i;
+
+  for (i = 0; i < n; i++)
+    free (paths[i]);
+  free (paths);
+}
+
 /* REDIRECTEE is a union: fd-number redirects (2>&1, 3>&-) hold an int.
    Same instruction list as dispose_redirects, which owns the filename. */
 static int
@@ -422,12 +438,16 @@ rash_redirectee_is_word (enum r_instruction ri)
     }
 }
 
+/* PATHS, when non-null, holds the pre-expanded target per row (NULL for
+   fd-number rows); rows then also carry exists / will_clobber. */
 static void
-rash_push_redirects (lua_State *L, REDIRECT *redirects)
+rash_push_redirects (lua_State *L, REDIRECT *redirects, char **paths)
 {
   REDIRECT *redirect;
   int index;
   const char *word;
+  struct stat st;
+  int exists;
 
   lua_newtable (L);
   for (redirect = redirects, index = 1; redirect; redirect = redirect->next, index++)
@@ -447,6 +467,17 @@ rash_push_redirects (lua_State *L, REDIRECT *redirects)
       else
 	lua_pushnil (L);
       lua_setfield (L, -2, "word");
+      if (paths && paths[index - 1])
+	{
+	  exists = (RASH_LSTAT (paths[index - 1], &st) == 0);
+	  lua_pushstring (L, paths[index - 1]);
+	  lua_setfield (L, -2, "path");
+	  lua_pushboolean (L, exists);
+	  lua_setfield (L, -2, "exists");
+	  lua_pushboolean (L, rash_redirect_will_clobber (redirect->instruction, exists,
+							 exists && S_ISREG (st.st_mode)));
+	  lua_setfield (L, -2, "will_clobber");
+	}
       lua_rawseti (L, -2, index);
     }
 }
@@ -489,7 +520,7 @@ rash_command_index (lua_State *L)
   else if (command && command->type == cm_simple && strcmp (field, "words") == 0)
     rash_push_words (L, command->value.Simple->words);
   else if (command && command->type == cm_simple && strcmp (field, "redirects") == 0)
-    rash_push_redirects (L, command->value.Simple->redirects);
+    rash_push_redirects (L, command->value.Simple->redirects, (char **)NULL);
   else
     lua_pushnil (L);
 
@@ -3472,6 +3503,117 @@ rash_word_lua_expandable (WORD_DESC *word)
   return 1;
 }
 
+/* Value of plain $NAME exactly as redirection_expand would produce it, or
+   NULL when it could split, glob, quote, or run code. var_lookup over
+   shell_variables is the expanding_redir lookup without the temp env or a
+   dynamic_value call, so refusing has no side effect and C expands once. */
+static const char *
+rash_redirect_name_value (const char *name)
+{
+  SHELL_VAR *v, *ifs;
+  const char *value, *ifs_chars, *s;
+
+  v = var_lookup (name, shell_variables);
+  if (v == 0 || invisible_p (v) || nameref_p (v) || array_p (v) ||
+      assoc_p (v) || v->dynamic_value)
+    return 0;
+  value = value_cell (v);
+  if (value == 0 || *value == '\0')
+    return 0;
+  ifs = var_lookup ("IFS", shell_variables);
+  ifs_chars = (ifs && invisible_p (ifs) == 0 && value_cell (ifs)) ? value_cell (ifs) : " \t\n";
+  for (s = value; *s; s++)
+    if (strchr (RASH_REDIR_UNSAFE_CHARS " \t\n", *s) || strchr (ifs_chars, *s))
+      return 0;
+  return value;
+}
+
+/* Target of one file redirect when expanding it is a pure lookup: a literal
+   or plain $NAME (phase 3's shape rule). NULL keeps the list on C. */
+static const char *
+rash_redirect_safe_target (WORD_DESC *word)
+{
+  if (rash_word_lua_expandable (word) == 0 || word->word[0] == '\0')
+    return 0;
+  if (strpbrk (word->word, RASH_REDIR_UNSAFE_CHARS) != 0 && word->word[0] != '$')
+    return 0;
+  if (word->word[0] == '$')
+    return rash_redirect_name_value (word->word + 1);
+  return word->word;
+}
+
+/* Safe-shape redirect pre-expansion (Rack phase 4 slice B). Returns a
+   path per row (NULL for fd-number rows) when every file target is a pure
+   lookup, else NULL so do_redirections expands in Bash order. *APPLY gets a
+   copy carrying literal paths when a $NAME was resolved, so the port opens
+   exactly the path policy saw without expanding again. */
+static char **
+rash_redirects_preexpand (REDIRECT *list, REDIRECT **apply)
+{
+  REDIRECT *r, *copy;
+  char **paths;
+  const char *target;
+  int n, i, renamed;
+
+  *apply = (REDIRECT *)NULL;
+  for (n = 0, r = list; r; r = r->next)
+    {
+      n++;
+      if (r->rflags & REDIR_VARASSIGN)
+	return 0;
+      switch (r->instruction)
+	{
+	case r_duplicating_input:
+	case r_duplicating_output:
+	case r_close_this:
+	case r_move_input:
+	case r_move_output:
+	case r_output_direction:
+	case r_input_direction:
+	case r_inputa_direction:
+	case r_appending_to:
+	case r_err_and_out:
+	case r_append_err_and_out:
+	case r_input_output:
+	case r_output_force:
+	  break;
+	default:
+	  return 0;
+	}
+    }
+
+  paths = (char **)xmalloc (n * sizeof (char *));
+  renamed = 0;
+  for (i = 0, r = list; r; r = r->next, i++)
+    {
+      paths[i] = 0;
+      if (rash_redirectee_is_word (r->instruction) == 0)
+	continue;
+      target = rash_redirect_safe_target (r->redirectee.filename);
+      if (target == 0)
+	{
+	  rash_free_paths (paths, i);
+	  return 0;
+	}
+      paths[i] = savestring (target);
+      if (strcmp (target, r->redirectee.filename->word) != 0)
+	renamed = 1;
+    }
+
+  if (renamed)
+    {
+      copy = copy_redirects (list);
+      for (i = 0, r = copy; r; r = r->next, i++)
+	if (paths[i])
+	  {
+	    dispose_word (r->redirectee.filename);
+	    r->redirectee.filename = make_bare_word (paths[i]);
+	  }
+      *apply = copy;
+    }
+  return paths;
+}
+
 /* "lua" only when every word in the list is lua-expandable. Else "c". */
 static const char *
 rash_expand_mode (WORD_LIST *words)
@@ -3612,16 +3754,23 @@ rash_hooks_try_lua_expand (WORD_LIST *unexpanded, WORD_LIST **out)
 /* Deny-before-apply. Zero means the caller runs do_redirections once.
    A Lua return value is ignored, so the hook cannot apply a second list. */
 int
-rash_hooks_redirect_policy (REDIRECT *redirects)
+rash_hooks_redirect_policy (REDIRECT *redirects, REDIRECT **apply)
 {
-  int i, base, status;
+  int i, n, base, status;
+  REDIRECT *r;
+  char **paths;
 
+  *apply = (REDIRECT *)NULL;
   if (redirects == 0)
     return 0;
   if (hook_command_depth == 0)
     rash_hooks_initialize (0);
   if (rash_lua == 0 || redirect_policy_count == 0)
     return 0;
+
+  for (n = 0, r = redirects; r; r = r->next)
+    n++;
+  paths = rash_redirects_preexpand (redirects, apply);
 
   stage_denied = 0;
   stage_deny_reason[0] = '\0';
@@ -3636,7 +3785,7 @@ rash_hooks_redirect_policy (REDIRECT *redirects)
       lua_rawgeti (rash_lua, -1, i);
       lua_remove (rash_lua, -2);
       lua_newtable (rash_lua);
-      rash_push_redirects (rash_lua, redirects);
+      rash_push_redirects (rash_lua, redirects, paths);
       lua_setfield (rash_lua, -2, "redirects");
       status = rash_lua_pcall (rash_lua, 1, 1);
       if (status != 0)
@@ -3666,6 +3815,13 @@ rash_hooks_redirect_policy (REDIRECT *redirects)
   lua_settop (rash_lua, base);
   in_redirect_policy_stage = 0;
   current_hook_enforcing = 0;
+  if (paths)
+    rash_free_paths (paths, n);
+  if (stage_denied && *apply)
+    {
+      dispose_redirects (*apply);
+      *apply = (REDIRECT *)NULL;
+    }
   return stage_denied ? 1 : 0;
 }
 

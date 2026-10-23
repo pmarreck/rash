@@ -1,0 +1,5 @@
+redir: same
+heredoc: same
+herestr: same
+vredir: same
+appendop: same

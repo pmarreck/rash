@@ -1,0 +1,33 @@
+# Differential control for Rack phase 4 pre-expansion: Bash's own redirect
+# suites must print the same thing with a no-op on_redirect_policy hook
+# loaded as with no hooks. The hook makes every safe-shape redirect take the
+# pre-expanded copy, so upstream behavior is the oracle, not this file.
+
+: ${THIS_SH:=../bash}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rash-rack-redirect-diff.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' 0
+
+mkdir "$tmp/hooks" || exit 1
+cat > "$tmp/hooks/noop.lua" <<'LUA'
+rash.on_redirect_policy(function(info)
+  local i = 1
+  while info.redirects[i] do
+    local _ = info.redirects[i].path
+    i = i + 1
+  end
+end)
+LUA
+
+for suite in redir heredoc herestr vredir appendop; do
+	${THIS_SH} ./$suite.tests > "$tmp/plain" 2>&1
+	RASH_HOOK_DIR="$tmp/hooks" RASH_ALLOW_UNOWNED_HOOKS=1 \
+		${THIS_SH} ./$suite.tests > "$tmp/hooked.raw" 2>&1
+	grep -v 'loads mutable hook' "$tmp/hooked.raw" > "$tmp/hooked"
+	if cmp -s "$tmp/plain" "$tmp/hooked"; then
+		echo "$suite: same"
+	else
+		echo "$suite: DIFFERENT"
+		diff "$tmp/plain" "$tmp/hooked" | head -20
+	fi
+done

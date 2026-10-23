@@ -10,3 +10,27 @@ child deny missing: yes
 dup status: 0
 dup content: yes
 dup rows: yes yes yes
+literal row: yes
+literal content: hi
+name row: yes
+name content: hi
+name+dup rows: yes yes
+loop contents: 1 2
+loop rows: yes yes
+cmdsub row: yes
+cmdsub once: 1
+cmdsub content: hi
+quoted row: yes
+herestring keeps list on C: yes
+herestring content: hi
+ambiguous row: yes
+ambiguous message: yes
+ambiguous status: 1
+unbound row: yes
+unbound message: yes
+unbound after: no
+glob value row: yes
+diff [f=NODIR/x; echo hi > $f]: same
+diff [echo hi > NODIR/y]: same
+diff [f=RO; echo hi > $f]: same
+exec persistent: three

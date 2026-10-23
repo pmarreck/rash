@@ -5982,15 +5982,26 @@ static int
 rash_stage_apply_simple_redirects (REDIRECT *redirects, int undoable)
 {
   int r;
+  REDIRECT *apply;
 
-  if (redirects && rash_hooks_redirect_policy (redirects) != 0)
+  apply = (REDIRECT *)NULL;
+  if (redirects && rash_hooks_redirect_policy (redirects, &apply) != 0)
     {
       if (undoable)
 	return (EX_REDIRFAIL);
       return (EXECUTION_FAILURE);
     }
 
-  r = do_redirections (redirects, undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
+  /* APPLY carries the paths policy saw, so nothing expands twice. */
+  if (apply)
+    add_unwind_protect (uw_dispose_redirects, apply);
+  r = do_redirections (apply ? apply : redirects,
+		       undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
+  if (apply)
+    {
+      remove_unwind_protect ();
+      dispose_redirects (apply);
+    }
   if (r == 0)
     return (0);
   if (undoable)

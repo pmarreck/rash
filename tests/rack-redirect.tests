@@ -83,3 +83,91 @@ echo "dup status: $(cat "$tmp/status")"
 echo "dup content: $( [ "$(cat "$tmp/DUP" 2>/dev/null)" = "hi" ] && echo yes || echo no )"
 echo "dup rows: $(contains "$(cat "$tmp/audit")" "row1=DUP") $(contains "$(cat "$tmp/audit")" "row2=nil") $(contains "$(cat "$tmp/audit")" "row3=nil")"
 rm -f "$tmp/hooks/rows.lua"
+
+# Slice B: safe-shape redirect words are expanded once, before policy.
+# Rows gain path / exists / will_clobber. Any unsafe word keeps the whole
+# list on the C port, unexpanded, so nothing expands twice or out of order.
+cat > "$tmp/hooks/paths.lua" <<'EOF2'
+rash.on_redirect_policy(function(info)
+  local i = 1
+  while info.redirects[i] do
+    local r = info.redirects[i]
+    rash.audit("p" .. i .. "=" .. tostring(r.path)
+      .. " e=" .. tostring(r.exists) .. " c=" .. tostring(r.will_clobber))
+    i = i + 1
+  end
+end)
+EOF2
+rm -f "$tmp/hooks/redirect.lua"
+audit()
+{
+	cat "$tmp/audit"
+}
+
+: > "$tmp/audit"
+printf 'old\n' > "$tmp/PRE"
+run "cd '$tmp' && echo hi > PRE"
+echo "literal row: $(contains "$(audit)" "p1=PRE e=true c=true")"
+echo "literal content: $(cat "$tmp/PRE")"
+
+: > "$tmp/audit"
+run "f='$tmp/V'; echo hi > \$f"
+echo "name row: $(contains "$(audit)" "p1=$tmp/V e=false c=false")"
+echo "name content: $(cat "$tmp/V" 2>/dev/null)"
+
+: > "$tmp/audit"
+run "cd '$tmp' && f=NV; echo hi > \$f 2>&1"
+echo "name+dup rows: $(contains "$(audit)" "p1=NV e=false c=false") $(contains "$(audit)" "p2=nil")"
+
+# The parsed tree is reused by loops; each iteration must expand afresh.
+: > "$tmp/audit"
+run "cd '$tmp' && for i in 1 2; do f=L\$i; echo \$i > \$f; done"
+echo "loop contents: $(cat "$tmp/L1" 2>/dev/null) $(cat "$tmp/L2" 2>/dev/null)"
+echo "loop rows: $(contains "$(audit)" "p1=L1") $(contains "$(audit)" "p1=L2")"
+
+# Unsafe shapes: no path, and the word expands exactly once (in the port).
+: > "$tmp/audit"
+run "cd '$tmp' && echo hi > \$(echo x >> COUNT; echo CS)"
+echo "cmdsub row: $(contains "$(audit)" "p1=nil")"
+echo "cmdsub once: $(wc -l < "$tmp/COUNT" | tr -d ' ')"
+echo "cmdsub content: $(cat "$tmp/CS" 2>/dev/null)"
+
+: > "$tmp/audit"
+run "cd '$tmp' && f=Q; echo hi > \"\$f\""
+echo "quoted row: $(contains "$(audit)" "p1=nil")"
+
+: > "$tmp/audit"
+run "cd '$tmp' && f=MIX; echo hi > \$f <<<x"
+echo "herestring keeps list on C: $(contains "$(audit)" "p1=nil")"
+echo "herestring content: $(cat "$tmp/MIX" 2>/dev/null)"
+
+# Bash errors stay Bash errors: ambiguous and unbound fall back to C.
+: > "$tmp/audit"
+run "cd '$tmp' && f='a b'; echo hi > \$f"
+echo "ambiguous row: $(contains "$(audit)" "p1=nil")"
+echo "ambiguous message: $(contains "$(cat "$tmp/err")" "ambiguous redirect")"
+echo "ambiguous status: $(cat "$tmp/status")"
+
+: > "$tmp/audit"
+run "cd '$tmp' && set -u; echo hi > \$NOPE_UNSET; echo after"
+echo "unbound row: $(contains "$(audit)" "p1=nil")"
+echo "unbound message: $(contains "$(cat "$tmp/err")" "unbound variable")"
+echo "unbound after: $(contains "$(cat "$tmp/out")" "after")"
+
+: > "$tmp/audit"
+run "cd '$tmp' && f='G*'; echo hi > \$f"
+echo "glob value row: $(contains "$(audit)" "p1=nil")"
+
+# Differential: a failing open prints the same diagnostic with or without a
+# policy hook, so pre-expansion cannot change what Bash reports.
+for shape in "f=NODIR/x; echo hi > \$f" "echo hi > NODIR/y" "f=RO; echo hi > \$f"; do
+	[ -e "$tmp/RO" ] || { : > "$tmp/RO"; chmod 0444 "$tmp/RO"; }
+	run "cd '$tmp' && $shape"
+	with_err=$(cat "$tmp/err" | grep -v WARNING); with_status=$(cat "$tmp/status")
+	${THIS_SH} --norc --noprofile -c "cd '$tmp' && $shape" >/dev/null 2>"$tmp/err.c"; c_status=$?
+	echo "diff [$shape]: $( [ "$with_err" = "$(cat "$tmp/err.c")" ] && [ "$with_status" = "$c_status" ] && echo same || echo "DIFFERENT: $with_err / $(cat "$tmp/err.c")" )"
+done
+
+# exec makes the redirect outlive the command; the applied copy must not.
+run "cd '$tmp' && f=EX; exec 3> \$f; echo three >&3; exec 3>&-; cat EX"
+echo "exec persistent: $(cat "$tmp/out")"
