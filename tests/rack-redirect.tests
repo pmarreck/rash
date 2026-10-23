@@ -66,3 +66,20 @@ echo "child allow: $( [ "$(cat "$tmp/CHILD" 2>/dev/null)" = "hi" ] && echo yes |
 : > "$tmp/audit"
 run "cd '$tmp' && enable -n echo && echo hi > BLOCKED2"
 echo "child deny missing: $( [ ! -e "$tmp/BLOCKED2" ] && echo yes || echo no )"
+
+# fd-number rows (2>&1, 2>&-) have no word. Reading them must not crash.
+cat > "$tmp/hooks/rows.lua" <<'EOF2'
+rash.on_redirect_policy(function(info)
+  local i = 1
+  while info.redirects[i] do
+    rash.audit("row" .. i .. "=" .. tostring(info.redirects[i].word))
+    i = i + 1
+  end
+end)
+EOF2
+: > "$tmp/audit"
+run "cd '$tmp' && echo hi > DUP 2>&1 3>&-"
+echo "dup status: $(cat "$tmp/status")"
+echo "dup content: $( [ "$(cat "$tmp/DUP" 2>/dev/null)" = "hi" ] && echo yes || echo no )"
+echo "dup rows: $(contains "$(cat "$tmp/audit")" "row1=DUP") $(contains "$(cat "$tmp/audit")" "row2=nil") $(contains "$(cat "$tmp/audit")" "row3=nil")"
+rm -f "$tmp/hooks/rows.lua"

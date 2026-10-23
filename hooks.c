@@ -394,6 +394,34 @@ rash_push_words (lua_State *L, WORD_LIST *words)
     }
 }
 
+/* REDIRECTEE is a union: fd-number redirects (2>&1, 3>&-) hold an int.
+   Same instruction list as dispose_redirects, which owns the filename. */
+static int
+rash_redirectee_is_word (enum r_instruction ri)
+{
+  switch (ri)
+    {
+    case r_reading_until:
+    case r_deblank_reading_until:
+    case r_reading_string:
+    case r_output_direction:
+    case r_input_direction:
+    case r_inputa_direction:
+    case r_appending_to:
+    case r_err_and_out:
+    case r_append_err_and_out:
+    case r_input_output:
+    case r_output_force:
+    case r_duplicating_input_word:
+    case r_duplicating_output_word:
+    case r_move_input_word:
+    case r_move_output_word:
+      return 1;
+    default:
+      return 0;
+    }
+}
+
 static void
 rash_push_redirects (lua_State *L, REDIRECT *redirects)
 {
@@ -411,7 +439,8 @@ rash_push_redirects (lua_State *L, REDIRECT *redirects)
 			|| redirect->instruction == r_output_force);
       lua_setfield (L, -2, "is_clobber");
       word = 0;
-      if (redirect->redirectee.filename && redirect->redirectee.filename->word)
+      if (rash_redirectee_is_word (redirect->instruction) &&
+	  redirect->redirectee.filename && redirect->redirectee.filename->word)
 	word = redirect->redirectee.filename->word;
       if (word)
 	lua_pushstring (L, word);

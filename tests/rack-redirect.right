@@ -7,3 +7,6 @@ plain output: yes
 plain skipped policy: yes
 child allow: yes
 child deny missing: yes
+dup status: 0
+dup content: yes
+dup rows: yes yes yes

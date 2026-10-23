@@ -18,3 +18,5 @@ spawn command stdout: done
 sensitive clobber denies: yes
 sensitive clobber status nonzero: yes
 sensitive clobber file unchanged: yes
+dup redirect status: 0
+dup redirect content: dup-ok

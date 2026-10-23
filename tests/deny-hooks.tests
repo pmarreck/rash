@@ -120,3 +120,12 @@ err=$(cat "$tmp/clobber.err")
 echo "sensitive clobber denies: $(contains "$err" "rash: denied:")"
 echo "sensitive clobber status nonzero: $( [ "$status" -ne 0 ] && echo yes || echo no )"
 echo "sensitive clobber file unchanged: $(contains "$(cat "$tmp/home/.ssh/authorized_keys")" "old")"
+
+# --- fd-duplicating redirects carry an fd number, not a word; reading
+#     command.redirects must not dereference it (2>&1 used to segfault) ---
+rm -f "$tmp"/*.lua
+cp ../hooks/deny_sensitive_clobber.lua "$tmp/deny_sensitive_clobber.lua"
+out=$(RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_HOOK_ENFORCE_UNOWNED=1 ${THIS_SH} --norc --noprofile -c 'echo dup-ok > "$1" 2>&1' rash-hook-test "$tmp/dup-out" 2> "$tmp/dup.err")
+status=$?
+echo "dup redirect status: $status"
+echo "dup redirect content: $(cat "$tmp/dup-out" 2>/dev/null)"
