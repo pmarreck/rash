@@ -2306,6 +2306,60 @@ rash_lua_is_directory (lua_State *L)
   return 1;
 }
 
+/* Snapshot dedupe window for one simple-command redirect apply (Rack
+   phase 4 slice C): policy and in-port on_clobber may both snapshot a
+   path, and the preimage is taken once. Owns the abspaths it records. */
+static int apply_window_active;
+static char **apply_window_paths;
+static int apply_window_count;
+
+static int
+rash_apply_window_has (const char *abspath)
+{
+  int i;
+
+  if (apply_window_active == 0)
+    return 0;
+  for (i = 0; i < apply_window_count; i++)
+    if (strcmp (apply_window_paths[i], abspath) == 0)
+      return 1;
+  return 0;
+}
+
+/* Takes ABSPATH; frees it when no window is open. */
+static void
+rash_apply_window_add (char *abspath)
+{
+  if (apply_window_active == 0)
+    {
+      free (abspath);
+      return;
+    }
+  apply_window_paths = (char **)xrealloc (apply_window_paths,
+					  (apply_window_count + 1) * sizeof (char *));
+  apply_window_paths[apply_window_count++] = abspath;
+}
+
+void
+rash_hooks_redirect_apply_end (void)
+{
+  int i;
+
+  for (i = 0; i < apply_window_count; i++)
+    free (apply_window_paths[i]);
+  free (apply_window_paths);
+  apply_window_paths = 0;
+  apply_window_count = 0;
+  apply_window_active = 0;
+}
+
+void
+rash_hooks_redirect_apply_begin (void)
+{
+  rash_hooks_redirect_apply_end ();
+  apply_window_active = 1;
+}
+
 static int
 rash_lua_snapshot_file (lua_State *L)
 {
@@ -2332,6 +2386,15 @@ rash_lua_snapshot_file (lua_State *L)
     }
 
   abspath = rash_undo_abspath (path);
+  if (rash_apply_window_has (abspath))
+    {
+      /* Policy already took this path's preimage for this apply. */
+      free (abspath);
+      free (dir);
+      lua_pushboolean (L, 1);
+      lua_pushliteral (L, "already");
+      return 2;
+    }
   existed = (RASH_LSTAT (abspath, &st) == 0);
   if (existed && S_ISREG (st.st_mode) == 0)
     {
@@ -2422,7 +2485,7 @@ rash_lua_snapshot_file (lua_State *L)
     fprintf (meta, "existed=0\n");
   fclose (meta);
 
-  free (abspath);
+  rash_apply_window_add (abspath);
   free (dir);
   lua_pushboolean (L, 1);
   return 1;

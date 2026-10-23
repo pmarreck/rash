@@ -5978,6 +5978,12 @@ execute_subshell_builtin_or_function (WORD_LIST *words, REDIRECT *redirects,
    EXECUTION_FAILURE; caller exits. A policy deny returns before
    do_redirections, so there is nothing to undo. Sensors stay inside
    do_redirections when the C port runs. */
+static void
+uw_redirect_apply_end (void *ignore)
+{
+  rash_hooks_redirect_apply_end ();
+}
+
 static int
 rash_stage_apply_simple_redirects (REDIRECT *redirects, int undoable)
 {
@@ -5985,22 +5991,35 @@ rash_stage_apply_simple_redirects (REDIRECT *redirects, int undoable)
   REDIRECT *apply;
 
   apply = (REDIRECT *)NULL;
-  if (redirects && rash_hooks_redirect_policy (redirects, &apply) != 0)
+  if (redirects == 0)
+    r = do_redirections (redirects, undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
+  else
     {
-      if (undoable)
-	return (EX_REDIRFAIL);
-      return (EXECUTION_FAILURE);
-    }
+      /* One snapshot per path for this apply, even if do_redirections
+	 longjmps out. */
+      rash_hooks_redirect_apply_begin ();
+      add_unwind_protect (uw_redirect_apply_end, (void *)NULL);
+      if (rash_hooks_redirect_policy (redirects, &apply) != 0)
+	{
+	  remove_unwind_protect ();
+	  rash_hooks_redirect_apply_end ();
+	  if (undoable)
+	    return (EX_REDIRFAIL);
+	  return (EXECUTION_FAILURE);
+	}
 
-  /* APPLY carries the paths policy saw, so nothing expands twice. */
-  if (apply)
-    add_unwind_protect (uw_dispose_redirects, apply);
-  r = do_redirections (apply ? apply : redirects,
-		       undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
-  if (apply)
-    {
+      /* APPLY carries the paths policy saw, so nothing expands twice. */
+      if (apply)
+	add_unwind_protect (uw_dispose_redirects, apply);
+      r = do_redirections (apply ? apply : redirects,
+			   undoable ? (RX_ACTIVE|RX_UNDOABLE) : RX_ACTIVE);
+      if (apply)
+	{
+	  remove_unwind_protect ();
+	  dispose_redirects (apply);
+	}
       remove_unwind_protect ();
-      dispose_redirects (apply);
+      rash_hooks_redirect_apply_end ();
     }
   if (r == 0)
     return (0);

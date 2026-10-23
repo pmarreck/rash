@@ -212,7 +212,7 @@ Usually worse than `before_pipeline` (deny mid-pipe). Deferred.
 | `rash.warn` | stderr message | any |
 | `rash.deny(reason)` | abort current stage | hook / before / before_pipeline / on_builtin / on_function / on_exec / redirect / download-pipe |
 | `rash.spawn(argv)` | fork/exec, capture out/err (64 KiB), no hook re-entry | any |
-| `rash.snapshot_file` / `rash.undo_last` | clobber preimage stack | redirect / clobber |
+| `rash.snapshot_file` / `rash.undo_last` | clobber preimage stack. Within one simple-command apply (policy through `do_redirections`) each path is taken once; a repeat returns `true, "already"`. | redirect policy / redirect / clobber |
 | `rash.approve_bytes` / `rash.exec_with_stdin` | installer review + exact stdin exec | download-pipe |
 
 ---

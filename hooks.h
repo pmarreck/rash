@@ -26,6 +26,10 @@ extern int rash_hooks_try_lua_expand (WORD_LIST *unexpanded, WORD_LIST **out);
    targets were pre-expanded, *apply is a copy carrying those exact paths;
    the caller applies it instead of REDIRECTS and disposes it. */
 extern int rash_hooks_redirect_policy (REDIRECT *redirects, REDIRECT **apply);
+/* Bracket one simple-command redirect apply (policy through
+   do_redirections). Inside it, rash.snapshot_file takes each path once. */
+extern void rash_hooks_redirect_apply_begin (void);
+extern void rash_hooks_redirect_apply_end (void);
 /* After a simple command finishes; optional capped stdout/stderr capture. */
 extern void rash_hooks_after_simple (WORD_LIST *words, int status,
 				    const char *captured_stdout, size_t stdout_len,

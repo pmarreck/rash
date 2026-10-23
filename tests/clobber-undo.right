@@ -17,3 +17,8 @@ undo unlink: yes
 created file after undo: no
 oversize snapshot fails: yes
 oversize still clobbered: tiny
+both sites, one command, entries: 1
+two more commands, entries: 3
+packaged safe shape entries: 1
+packaged safe shape warnings: 1
+packaged quoted shape entries: 2

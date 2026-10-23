@@ -185,3 +185,49 @@ RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$undo_dir" RASH_U
   rash-test "$tmp/bigish" 2> "$tmp/cap.err"
 echo "oversize snapshot fails: $(contains "$(cat "$tmp/cap.err")" "cap-fail")"
 echo "oversize still clobbered: $(cat "$tmp/bigish")"
+
+# --- phase 4 slice C: snapshot once per path per simple-command apply ---
+# A hook that snapshots at policy (pre-expanded path) and again in on_clobber
+# must leave one entry per command, not two. Separate commands stay separate.
+clear_hooks
+rm -f "$tmp/both.lua" "$tmp/undo_precious_clobber.lua"
+once_dir="$tmp/undo-once"
+mkdir "$once_dir" || exit 1
+printf 'v1\n' > "$tmp/twice"
+cat > "$tmp/both.lua" <<'LUA'
+rash.on_redirect_policy(function(info)
+  local i = 1
+  while info.redirects[i] do
+    local r = info.redirects[i]
+    if r.path and r.will_clobber then
+      rash.snapshot_file(r.path)
+    end
+    i = i + 1
+  end
+end)
+rash.on_clobber(function(ctx)
+  rash.snapshot_file(ctx.path)
+end)
+LUA
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$once_dir" \
+  ${THIS_SH} --norc --noprofile -c 'f=$1; printf v2 > $f' rash-test "$tmp/twice" 2> "$tmp/once.err"
+echo "both sites, one command, entries: $(ls "$once_dir" | grep -c '^[0-9][0-9]*$')"
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$once_dir" \
+  ${THIS_SH} --norc --noprofile -c 'f=$1; printf v3 > $f; printf v4 > $f' rash-test "$tmp/twice" 2>> "$tmp/once.err"
+echo "two more commands, entries: $(ls "$once_dir" | grep -c '^[0-9][0-9]*$')"
+rm -f "$tmp/both.lua"
+
+# Packaged undo hook: one snapshot for a safe shape (policy) and for a
+# quoted shape (on_clobber fallback).
+pkg_dir="$tmp/undo-pkg"
+mkdir "$pkg_dir" "$tmp/proj" || exit 1
+cp ../hooks/undo_precious_clobber.lua "$tmp/undo_precious_clobber.lua"
+printf 'SECRET=1\n' > "$tmp/proj/.env"
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$pkg_dir" \
+  ${THIS_SH} --norc --noprofile -c 'f=$1; printf x > $f' rash-test "$tmp/proj/.env" 2> "$tmp/pkg.err"
+echo "packaged safe shape entries: $(ls "$pkg_dir" | grep -c '^[0-9][0-9]*$')"
+echo "packaged safe shape warnings: $(grep -c 'snapshotted precious' "$tmp/pkg.err")"
+RASH_HOOK_DIR="$tmp" RASH_ALLOW_UNOWNED_HOOKS=1 RASH_UNDO_DIR="$pkg_dir" \
+  ${THIS_SH} --norc --noprofile -c 'printf y > "$1"' rash-test "$tmp/proj/.env" 2>> "$tmp/pkg.err"
+echo "packaged quoted shape entries: $(ls "$pkg_dir" | grep -c '^[0-9][0-9]*$')"
+rm -f "$tmp/undo_precious_clobber.lua"

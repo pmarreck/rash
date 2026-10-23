@@ -167,8 +167,12 @@ Undo storage:
 | `RASH_UNDO_MAX_BYTES` | `268435456` (256 MiB) |
 
 Oversize or non-regular targets fail `snapshot_file` loudly (no silent skip).
+Within one simple-command redirect apply, a second `snapshot_file` of the same
+path returns `true, "already"` and copies nothing, so a policy hook and an
+`on_clobber` fallback can both ask without doubling the undo stack.
 Fd-duplication / close redirects (`>&2`, `n<&-`) have no path and are outside
-this family. Packaged example: `undo_precious_clobber.lua` (opt-in).
+this family. Packaged example: `undo_precious_clobber.lua` (opt-in; snapshots at
+`on_redirect_policy` for safe shapes, `on_clobber` for the rest).
 
 Normal hook configuration loads once per Rash process. Development has two
 explicit reload paths. `RASH_HOOK_RELOAD=mtime` checks a cached manifest before

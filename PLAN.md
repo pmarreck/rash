@@ -6,9 +6,9 @@ Background for an item is in `docs/plan_context/`. Purpose stays in `INTENT.md`.
 
 ## Rack
 
-- [ ] Finish Rack phase 4 after the deny-before-apply waist: Lua redirect intent list, clobber snapshot on that middleware, download-pipe rebased onto cmd. (context: docs/plan_context/rack-phase4.md)
+- [ ] Finish Rack phase 4: download-pipe rebased onto cmd, and decide whether policy may return a replacement redirect list. (context: docs/plan_context/rack-phase4.md)
 - [x] Phase 4 slice B: pre-expand safe-shape redirect words once; policy rows gain path/exists/will_clobber; C applies them without re-expanding. (context: docs/plan_context/rack-phase4.md) (done 2026-10-23 11:20 EDT)
-- [ ] Phase 4 slice C: `rash.snapshot_file` once per path per simple-command apply; packaged undo hook snapshots at policy with on_clobber fallback. (context: docs/plan_context/rack-phase4.md)
+- [x] Phase 4 slice C: `rash.snapshot_file` once per path per simple-command apply; packaged undo hook snapshots at policy with on_clobber fallback. (context: docs/plan_context/rack-phase4.md) (done 2026-10-23 11:55 EDT)
 - [ ] Rack phase 5: lower simple commands to a Lua IR so the blessed stack owns order. (context: intents/luajit-rack-executor.md)
 - [ ] COW / OverlayFS workspace launcher, after the phase 4 redirect slice is green. Do not start it during that slice. (context: MUTATION_SAFETY_OPTIONS.md)
 - [x] Policy and parse-stage redirect tables no longer read fd-number redirects (2>&1) as words; that segfaulted. (done 2026-10-23 10:45 EDT)
@@ -22,6 +22,7 @@ Background for an item is in `docs/plan_context/`. Purpose stays in `INTENT.md`.
 - [ ] Content-hash exec allowlist on `on_exec` (Safety C). Not the active slice.
 - [ ] Effect-scoped passkey approvals stay shelved until an owner decision. (context: docs/plan_context/passkey-approvals.md)
 - [ ] Fourth SIGCHLD loss and the trap allocator stay documented, not patched, and not mailed. (context: docs/plan_context/sigchld-remainder.md)
+- [ ] Widen safe redirect shapes to "$f" and $NAME/literal concatenations (e.g. $HOME/.ssh/x) so policy sees real paths.
 - [ ] Silence the pre-existing -Wformat-truncation warnings in the hooks.c snapshot path builders.
 
 ## Later
