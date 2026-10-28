@@ -27,5 +27,5 @@ Background for an item is in `docs/plan_context/`. Purpose stays in `INTENT.md`.
 
 ## Later
 
-- [ ] Confirm rash-codex, rash-id, and rash-sig2 have no unique unmerged work before removing those worktrees. (context: docs/plan_context/stale-worktrees.md)
+- [x] 2026-10-28 14:15 EDT Retired rash-codex, rash-id and rash-sig2 after confirming clean trees and merged tips, and deleted nine local upstream-mirror branches identical to origin. (context: docs/plan_context/stale-worktrees.md)
 - [ ] Goto cleanup, emit-ast v2, Zig assessment, structured FDs, and the live-surface rename stay deferred. (context: docs/plan_context/deferred-cleanup.md)

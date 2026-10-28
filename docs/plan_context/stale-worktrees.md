@@ -9,3 +9,5 @@ Left in place on 2026-10-14. Do not delete them from an inbox pass.
 All three tips are ancestors of master `122080aa`. Uncommitted files in `rash-id` and `rash-sig2` were not listed. Do not remove the checkouts until that listing is done.
 
 Their `PLAN.md` files repeat boxes that master already closed (purpose, identity, hooks, the second SIGCHLD fix) or that were superseded (mailing upstream). Do not reimplement those boxes. Removal waits on a check that no unique unmerged work remains.
+
+2026-10-28: Listing done. All three trees were clean except for an ignored nix `result` link, and no process was running in them. BDFN approved removal. They were removed with `git worktree remove` and their branches with `git branch -d`.
